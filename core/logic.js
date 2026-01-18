@@ -1,4 +1,4 @@
-const { COLORS, getRemainingData } = require('../utils/helpers');
+const { COLORS, getRemainingData } = require('../helpers');
 
 function parseTAFForMax(rawTaf) {
     if (!rawTaf) return null;
@@ -13,7 +13,6 @@ function parseTAFForMax(rawTaf) {
 
 function calculateBenchmarkProb(current, targetMax, benchmarkTemp, windDir, clouds, tz, targetObj, trendState, tafMax, isRaining) {
     if (benchmarkTemp === null) return 0;
-    
     if (isRaining && current < targetMax) return 0;
     if (tafMax !== null && tafMax >= targetMax) return 99;
     if (current >= targetMax) return 100;
@@ -55,24 +54,41 @@ function calculateBenchmarkProb(current, targetMax, benchmarkTemp, windDir, clou
 }
 
 function getSniperSignal(reachProb, breakProb, dev, trendArrow, isCalibrating, tafConfirmation, isRaining) {
-    if (isCalibrating) return `${COLORS.CYAN}⏳ CALIBRATING...${COLORS.RESET}`;
-
-    if (isRaining && reachProb < 100) return `${COLORS.BLUE_BG}⛔ RAIN KILL${COLORS.RESET}`;
-    if (tafConfirmation) return `${COLORS.PURPLE_BOLD}🔮 PREDICTION BREAK${COLORS.RESET}`;
+    if (isCalibrating) return "CALIBRATING";
+    if (isRaining && reachProb < 100) return "RAIN KILL";
+    if (tafConfirmation) return "PREDICTION BREAK";
 
     const isDown = trendArrow.includes("↓");
     const safeDev = dev !== null ? dev : 0;
 
-    if (breakProb >= 98 || (breakProb >= 85 && !isDown)) {
-        return `${COLORS.ORANGE}${COLORS.BOLD}🔥 SCALP BREAK (${breakProb}%)${COLORS.RESET}`; 
-    }
-
-    if (reachProb >= 80 && safeDev >= -0.5 && !isDown) return `${COLORS.GREEN}${COLORS.BOLD}💎 BUY REACH (${reachProb}%)${COLORS.RESET}`;
-    if (reachProb >= 70 && safeDev >= 0 && !isDown) return `${COLORS.GREEN}✅ BUY REACH (${reachProb}%)${COLORS.RESET}`;
-
-    if (reachProb < 40 || safeDev < -1.5 || isDown) return `${COLORS.RED}⛔ NO TRADE${COLORS.RESET}`;
+    if (breakProb >= 98 || (breakChance >= 85 && !isDown)) return `SCALP BREAK (${breakProb}%)`;
+    if (reachProb >= 80 && safeDev >= -0.5 && !isDown) return `BUY REACH (${reachProb}%)`;
+    if (reachProb >= 70 && safeDev >= 0 && !isDown) return `BUY REACH (${reachProb}%)`;
+    if (reachProb < 40 || safeDev < -1.5 || isDown) return "NO TRADE";
     
-    return `${COLORS.YELLOW}✋ WAIT${COLORS.RESET}`;
+    return "WAIT";
 }
 
-module.exports = { parseTAFForMax, calculateBenchmarkProb, getSniperSignal };
+function calculateEdge(myProb, marketPrice) {
+    if (!marketPrice || marketPrice <= 0) return 0;
+    const edge = (myProb / 100) - marketPrice;
+    return (edge * 100).toFixed(1);
+}
+
+function calculateStake(myProb, marketPrice, bankroll, kellyFraction) {
+    if (!marketPrice || marketPrice <= 0 || marketPrice >= 1) return 0;
+    
+    const p = myProb / 100;
+    if (p <= marketPrice) return 0;
+
+    const b = (1 / marketPrice) - 1;
+    const q = 1 - p;
+    
+    const f = (b * p - q) / b;
+    
+    const stake = f * kellyFraction * bankroll;
+    
+    return Math.max(0, stake).toFixed(2);
+}
+
+module.exports = { parseTAFForMax, calculateBenchmarkProb, getSniperSignal, calculateEdge, calculateStake };

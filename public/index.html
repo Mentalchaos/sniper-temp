@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SNIPER V60: WEB DASHBOARD</title>
+    <style>
+        body { background-color: #0f1115; color: #e0e0e0; font-family: 'Consolas', 'Monaco', monospace; margin: 0; padding: 20px; }
+        h1 { color: #f0a500; text-align: center; font-size: 24px; margin-bottom: 20px; }
+        
+        .controls { display: flex; justify-content: center; gap: 20px; margin-bottom: 20px; }
+        button { padding: 10px 30px; border: none; font-weight: bold; cursor: pointer; border-radius: 4px; font-family: inherit; font-size: 16px; transition: 0.2s; }
+        #startBtn { background-color: #2e7d32; color: white; }
+        #startBtn:hover { background-color: #1b5e20; }
+        #stopBtn { background-color: #c62828; color: white; }
+        #stopBtn:hover { background-color: #b71c1c; }
+        .status-bar { text-align: center; margin-bottom: 15px; font-size: 14px; color: #888; }
+
+        table { width: 100%; border-collapse: collapse; background: #161b22; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #30363d; }
+        th { background-color: #0d1117; color: #8b949e; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+        tr:hover { background-color: #21262d; }
+        
+        /* Colores Dinámicos */
+        .val-green { color: #4caf50; font-weight: bold; }
+        .val-red { color: #f44336; font-weight: bold; }
+        .val-orange { color: #ff9800; font-weight: bold; }
+        .val-magenta { color: #d500f9; font-weight: bold; }
+        .val-cyan { color: #00bcd4; }
+        
+        .signal-box { padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 12px; display: inline-block; width: 140px; text-align: center;}
+        .sig-wait { background: #333; color: #aaa; }
+        .sig-reach { background: #1b5e20; color: #fff; border: 1px solid #4caf50; }
+        .sig-break { background: #b71c1c; color: #fff; border: 1px solid #f44336; animation: pulse 1s infinite; }
+        .sig-pred { background: #4a148c; color: #e040fb; border: 1px solid #d500f9; }
+
+        .trade-btn { background: #238636; color: white; text-decoration: none; padding: 5px 10px; border-radius: 4px; font-size: 12px; display: inline-block; }
+        .trade-btn:hover { background: #2ea043; }
+
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+    <h1>SNIPER V60 MARKET DASHBOARD</h1>
+
+    <div class="controls">
+        <button id="startBtn" onclick="toggleBot(true)">▶ INICIAR</button>
+        <button id="stopBtn" onclick="toggleBot(false)">⏹ DETENER</button>
+    </div>
+    
+    <div class="status-bar" id="statusText">Estado: Esperando comando...</div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Lugar</th>
+                <th>Tiempo</th>
+                <th>Actual</th>
+                <th>Dev</th>
+                <th>Tend</th>
+                <th>Max Hoy</th>
+                <th>Señal (Prob)</th>
+                <th>Meta</th>
+                <th>TAF</th>
+                <th>Precio / Edge</th>
+                <th>Acción</th>
+            </tr>
+        </thead>
+        <tbody id="tableBody">
+            </tbody>
+    </table>
+
+    <script>
+        let isRunning = false;
+
+        async function toggleBot(state) {
+            const endpoint = state ? '/api/start' : '/api/stop';
+            await fetch(endpoint, { method: 'POST' });
+            isRunning = state;
+            document.getElementById('statusText').innerText = state ? "Estado: ESCANEANDO..." : "Estado: DETENIDO";
+        }
+
+        function formatTemp(unit, val) {
+            if (val === null || val === -999) return "--";
+            if (unit === 'F') return `${(val * 9/5 + 32).toFixed(1)}°F`;
+            return `${val}°C`;
+        }
+
+        async function updateDashboard() {
+            if (!isRunning) return;
+
+            try {
+                const res = await fetch('/api/data');
+                const data = await res.json();
+                const tbody = document.getElementById('tableBody');
+                tbody.innerHTML = '';
+
+                data.forEach(row => {
+                    const tr = document.createElement('tr');
+                    
+                    // Lógica de colores y formato
+                    let signalClass = 'sig-wait';
+                    if (row.signal.includes("REACH")) signalClass = 'sig-reach';
+                    if (row.signal.includes("BREAK")) signalClass = 'sig-break';
+                    if (row.signal.includes("PREDICTION")) signalClass = 'sig-pred';
+
+                    let devColor = row.dev >= 0 ? 'val-green' : 'val-red';
+                    
+                    // Construcción de la URL de Polymarket
+                    const polyLink = row.fullSlug ? 
+                        `<a href="https://polymarket.com/event/${row.fullSlug}" target="_blank" class="trade-btn">TRADE ↗</a>` : 
+                        `<span style="color:#555">--</span>`;
+
+                    tr.innerHTML = `
+                        <td style="font-weight:bold; color:#fff">${row.id}</td>
+                        <td style="color:#aaa">${row.timer}</td>
+                        <td class="val-cyan">${formatTemp(row.unit, row.curC)}</td>
+                        <td class="${devColor}">${row.devDisp}</td>
+                        <td>${row.trend}</td>
+                        <td class="val-magenta">${formatTemp(row.unit, row.high)}</td>
+                        <td><div class="signal-box ${signalClass}">${row.signal}</div></td>
+                        <td class="val-orange">${formatTemp(row.unit, row.target)}</td>
+                        <td class="val-magenta">${row.taf ? formatTemp(row.unit, row.taf) : '--'}</td>
+                        <td>${row.priceDisp}</td>
+                        <td>${polyLink}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (e) { console.error("Error fetching data", e); }
+        }
+
+        setInterval(updateDashboard, 2000); // Actualiza cada 2 segundos
+    </script>
+</body>
+</html>

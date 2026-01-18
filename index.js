@@ -1,15 +1,29 @@
+const express = require('express');
+const path = require('path');
 const { TARGETS, API_KEY } = require('./config/settings');
 const { COLORS, toF, writeLog, getRemainingData } = require('./utils/helpers');
-const { calculateBenchmarkProb, getSniperSignal, parseTAFForMax } = require('./core/logic');
+const { calculateBenchmarkProb, getSniperSignal, parseTAFForMax, calculateEdge } = require('./core/logic');
 const { fetchMetar, fetchTaf, fetchForecast, fetchDailyHistory } = require('./services/weather');
+const { fetchDynamicPrice, getDynamicSlug } = require('./services/polymarket');
 const { playSound } = require('./services/audio');
 
+// --- CONFIGURACIÓN DEL SERVIDOR WEB ---
+const app = express();
+const PORT = 3000;
+// Sirve los archivos estáticos (HTML) desde la carpeta 'public'
+app.use(express.static('public'));
+
+// --- ESTADO EN MEMORIA ---
+let isRunning = false; // Controla si el bot está escaneando o no
+let latestResults = []; // Almacena los datos para enviarlos a la web
 let history = {};
 let arrowCache = {};
 let hourlyForecasts = {}; 
 let dailyHighs = {}; 
 let tafData = {}; 
 let dailyEventLog = {}; 
+
+// --- FUNCIONES AUXILIARES ---
 
 function getCurrentBenchmark(target) {
     if (!hourlyForecasts[target.id] || hourlyForecasts[target.id].length === 0) return null;
@@ -24,6 +38,8 @@ function getCurrentBenchmark(target) {
     if (minDiff > 7200000) return null; 
     return closestForecast ? closestForecast.temp : null;
 }
+
+// --- ACTUALIZACIÓN DE DATOS DE FONDO ---
 
 async function updateAllForecasts() {
     TARGETS.forEach(async t => {
@@ -60,8 +76,11 @@ async function auditAllDailyHighs() {
     });
 }
 
+// --- LÓGICA PRINCIPAL DEL SNIPER ---
+
 async function checkTarget(target) {
     try {
+        // 1. Obtener Clima Actual
         const data = await fetchMetar(target.icao);
         if (!data || !data[0]) return null;
         
@@ -69,11 +88,7 @@ async function checkTarget(target) {
         const prevD = data[1];
         const curC = d.temp;
 
-        const wxString = d.wxString || "";
-        const isRaining = /(RA|DZ|TS|GR|PL)/.test(wxString);
-        let weatherDisp = wxString ? `[${COLORS.CYAN}${wxString}${COLORS.RESET}]` : "";
-        if (isRaining) weatherDisp = `[${COLORS.BLUE_BG}${wxString || "RAIN"}${COLORS.RESET}]`;
-
+        // 2. Determinar Meta (Max Target)
         let maxTarget = -999;
         let isCalibrating = true;
         if (hourlyForecasts[target.id] && hourlyForecasts[target.id].length > 0) {
@@ -81,21 +96,36 @@ async function checkTarget(target) {
             isCalibrating = false;
         }
 
+        // 3. Buscar Precio en Polymarket
+        const searchTemp = isCalibrating ? curC : maxTarget;
+        let tempForPoly = searchTemp;
+        if (target.unit === 'F') tempForPoly = (searchTemp * 9/5) + 32;
+
+        const polyPrice = await fetchDynamicPrice(target.polySlug, target.tz, tempForPoly);
+        // Generamos el slug completo para el link en la web
+        const fullSlug = getDynamicSlug(target.polySlug, target.tz);
+
+        // 4. Lógica de Clima (Lluvia, Viento, Benchmark)
+        const wxString = d.wxString || "";
+        const isRaining = /(RA|DZ|TS|GR|PL)/.test(wxString);
+
         const benchmarkC = getCurrentBenchmark(target);
 
+        // Flechas de tendencia
         if (!arrowCache[target.id]) {
             if (prevD) {
-                if (curC > prevD.temp) arrowCache[target.id] = `${COLORS.GREEN}${COLORS.BOLD}↑${COLORS.RESET}`;
-                else if (curC < prevD.temp) arrowCache[target.id] = `${COLORS.RED}${COLORS.BOLD}↓${COLORS.RESET}`;
-                else arrowCache[target.id] = `${COLORS.YELLOW}→${COLORS.RESET}`;
-            } else { arrowCache[target.id] = `${COLORS.YELLOW}→${COLORS.RESET}`; }
+                if (curC > prevD.temp) arrowCache[target.id] = "↑";
+                else if (curC < prevD.temp) arrowCache[target.id] = "↓";
+                else arrowCache[target.id] = "→";
+            } else arrowCache[target.id] = "→";
         }
         if (history[target.id] !== undefined) {
-            if (curC > history[target.id]) arrowCache[target.id] = `${COLORS.GREEN}${COLORS.BOLD}↑${COLORS.RESET}`;
-            else if (curC < history[target.id]) arrowCache[target.id] = `${COLORS.RED}${COLORS.BOLD}↓${COLORS.RESET}`;
+            if (curC > history[target.id]) arrowCache[target.id] = "↑";
+            else if (curC < history[target.id]) arrowCache[target.id] = "↓";
         }
         let trendArrow = arrowCache[target.id];
 
+        // Análisis TAF
         let tafMaxVal = null;
         let tafConfirmed = false;
         if (tafData[target.id]) {
@@ -103,6 +133,7 @@ async function checkTarget(target) {
             if (tafMaxVal !== null && tafMaxVal >= maxTarget) tafConfirmed = true;
         }
 
+        // Cálculos de Probabilidad
         let reachChance = 0;
         let breakChance = 0;
         if (!isCalibrating) {
@@ -111,21 +142,17 @@ async function checkTarget(target) {
         }
 
         const devValue = benchmarkC !== null ? (curC - benchmarkC) : null;
-        const signal = getSniperSignal(reachChance, breakChance, devValue, trendArrow, isCalibrating, tafConfirmed, isRaining);
+        
+        // Obtener señal y limpiarla de códigos de color ANSI (para la web)
+        let rawSignal = getSniperSignal(reachChance, breakChance, devValue, trendArrow, isCalibrating, tafConfirmed, isRaining);
+        // Regex para quitar los códigos de color de terminal (\x1b...)
+        let signalText = rawSignal.replace(/\x1b\[[0-9;]*m/g, "");
 
-        let sortScore = 0;
-        if (signal.includes("PREDICTION")) sortScore = 1000;
-        else if (signal.includes("SCALP")) sortScore = 900 + breakChance;
-        else if (signal.includes("BUY REACH")) sortScore = 700 + reachChance;
-        else if (signal.includes("WAIT")) sortScore = 500;
-        else if (signal.includes("CALIBRATING")) sortScore = 400;
-        else if (signal.includes("NO TRADE")) sortScore = 100;
-        else sortScore = 0; 
-
+        // 5. Alertas de Audio y Logs
         const lastBreakChance = history[target.id + '_lastBreak'] || 0;
         const lastReachChance = history[target.id + '_lastReach'] || 0;
         
-        if (!isCalibrating && !signal.includes("RAIN KILL")) {
+        if (!isCalibrating && !signalText.includes("RAIN")) {
             const currentDay = new Date().toLocaleString("en-US", {timeZone: target.tz, day: 'numeric'});
             if (!dailyEventLog[target.id] || dailyEventLog[target.id].date !== currentDay) {
                 dailyEventLog[target.id] = { date: currentDay, reachLogged: false, breakLogged: false };
@@ -135,18 +162,18 @@ async function checkTarget(target) {
             if (breakChance > lastBreakChance && breakChance >= 95) {
                 playSound('BLOOD');
                 if (!logState.breakLogged) {
-                    writeLog(`REGISTRO: ${currentDay} | ${target.id} | TIPO: BREAK | Prob: ${breakChance}% | Temp: ${curC}°C`);
+                    writeLog(`BREAK | ${target.id} | Price: ${polyPrice} | Edge: ${calculateEdge(reachChance, polyPrice)}%`);
                     logState.breakLogged = true;
                 }
             }
-            else if (signal.includes("PREDICTION BREAK") && history[target.id + '_lastPred'] !== true) {
+            else if (signalText.includes("PREDICTION") && history[target.id + '_lastPred'] !== true) {
                 playSound('BLOOD');
                 history[target.id + '_lastPred'] = true;
             }
-            else if (signal.includes("BUY REACH") && reachChance >= 75) {
+            else if (signalText.includes("REACH") && reachChance >= 75) {
                 if (lastReachChance < 75) playSound('YASUO'); 
                 if (!logState.reachLogged) {
-                    writeLog(`REGISTRO: ${currentDay} | ${target.id} | TIPO: REACH | Prob: ${reachChance}% | Temp: ${curC}°C`);
+                    writeLog(`REACH | ${target.id} | Price: ${polyPrice} | Edge: ${calculateEdge(reachChance, polyPrice)}%`);
                     logState.reachLogged = true;
                 }
             }
@@ -156,56 +183,118 @@ async function checkTarget(target) {
             playSound('VILLAGER');
         }
 
+        // Actualizar historial
         history[target.id] = curC;
         history[target.id + '_lastBreak'] = breakChance;
         history[target.id + '_lastReach'] = reachChance;
 
         const highSoFar = dailyHighs[target.id] || curC;
-        let highDisp = highSoFar > curC ? `${COLORS.MAGENTA}(Max:${highSoFar}C/${toF(highSoFar)}F)${COLORS.RESET}` : "";
-        const timerStr = getRemainingData(target.tz).str;
-        let deviationDisp = `[${COLORS.CYAN}Dev:--${COLORS.RESET}]`; 
-        if (benchmarkC !== null) {
-            const diff = curC - benchmarkC;
-            const color = diff >= 0 ? COLORS.GREEN : COLORS.RED;
-            deviationDisp = `[${color}Dev:${diff > 0 ? "+" : ""}${diff.toFixed(1)}°${COLORS.RESET}]`;
+        
+        // 6. Preparar datos para el Frontend (Web)
+        let edgeValue = null;
+        let priceDisp = "No Mkt";
+        if (polyPrice !== null) {
+            edgeValue = calculateEdge(reachChance, polyPrice);
+            priceDisp = `${(polyPrice * 100).toFixed(0)}¢ (Edge: ${edgeValue}%)`;
         }
-        const maxTgtStr = isCalibrating ? `${COLORS.CYAN}LOADING...${COLORS.RESET}` : `${COLORS.ORANGE}Max: ${maxTarget}°C${COLORS.RESET}`;
-        let tafDisp = tafMaxVal !== null ? `| ${COLORS.PURPLE_BOLD}TAF:${tafMaxVal}°C${COLORS.RESET}` : "";
 
+        // Calcular puntaje para ordenar la tabla
+        let sortScore = 0;
+        let edgeBonus = (edgeValue !== null && parseFloat(edgeValue) > 0) ? parseFloat(edgeValue) * 10 : 0;
+        if (signalText.includes("PREDICTION")) sortScore = 1000 + edgeBonus;
+        else if (signalText.includes("SCALP")) sortScore = 900 + breakChance + edgeBonus;
+        else if (signalText.includes("REACH")) sortScore = 700 + reachChance + edgeBonus;
+        else if (signalText.includes("WAIT")) sortScore = 500;
+        else sortScore = 0;
+
+        // Formatear desviación
+        let devDisp = "--";
+        if (benchmarkC !== null) {
+             let diff = curC - benchmarkC; 
+             let diffDisplay = target.unit === 'F' ? (diff * 1.8).toFixed(1) : diff.toFixed(1);
+             devDisp = (diff > 0 ? "+" : "") + diffDisplay + "°";
+        }
+
+        // Retornamos objeto JSON limpio
         return {
-            line: `● ${target.id.padEnd(14)} | ${timerStr} | Act: ${curC}°C/${toF(curC)}F ${weatherDisp} ${deviationDisp} ${trendArrow} ${highDisp} | ${signal} | ${maxTgtStr} ${tafDisp}`,
+            id: target.id,
+            unit: target.unit,
+            curC: curC,
+            high: highSoFar,
+            target: maxTarget,
+            taf: tafMaxVal,
+            dev: devValue,
+            devDisp: devDisp,
+            trend: trendArrow,
+            signal: signalText,
+            priceDisp: priceDisp,
+            fullSlug: fullSlug,
+            timer: getRemainingData(target.tz).str,
             score: sortScore
         };
 
-    } catch (e) { return { line: `[!] ${target.id}: ERR ${e.message}`, score: -1 }; }
+    } catch (e) { return null; }
 }
 
-async function monitor() {
+// --- BUCLE DE MONITOREO ---
+
+async function monitorLoop() {
+    if (!isRunning) return; // Si está detenido, no hace nada
+    
     const results = await Promise.all(TARGETS.map(t => checkTarget(t)));
-    
     const validResults = results.filter(r => r !== null);
+    
+    // Ordenar por importancia (Score)
     validResults.sort((a, b) => b.score - a.score);
-
-    let out = `\x1b[H\x1b[J${COLORS.YELLOW}=== SNIPER V50: CLEAN CORE ===${COLORS.RESET}\n`;
-    out += `Log activo: logs/sniper_blackbox.txt\n`;
-    out += `-------------------------------------------------------------------------------------------------------------------\n`;
     
-    validResults.forEach(r => {
-        out += r.line + "\n";
-    });
-
-    process.stdout.write(out);
+    // Actualizar la variable global que lee la web
+    latestResults = validResults; 
     
-    setTimeout(monitor, 5000); 
+    // Feedback mínimo en consola para saber que vive
+    process.stdout.write(`\r[${new Date().toLocaleTimeString()}] Escaneando ${validResults.length} mercados...`);
+    
+    // Siguiente ciclo en 5 segundos
+    if (isRunning) setTimeout(monitorLoop, 5000);
 }
 
-console.log("Iniciando Sniper V50...");
-updateAllForecasts();
-updateAllTAFs();
-auditAllDailyHighs();
+// --- RUTAS DE LA API (Endpoints) ---
 
-setInterval(updateAllForecasts, 1800000); 
-setInterval(auditAllDailyHighs, 300000);  
-setInterval(updateAllTAFs, 600000);       
+// Iniciar el bot desde el botón de la web
+app.post('/api/start', (req, res) => {
+    if (!isRunning) {
+        isRunning = true;
+        console.log("\n>>> SISTEMA INICIADO <<<");
+        monitorLoop();
+    }
+    res.sendStatus(200);
+});
 
-monitor();
+// Detener el bot desde el botón de la web
+app.post('/api/stop', (req, res) => {
+    isRunning = false;
+    console.log("\n>>> SISTEMA DETENIDO <<<");
+    res.sendStatus(200);
+});
+
+// La web pide los datos aquí cada 2 segundos
+app.get('/api/data', (req, res) => {
+    res.json(latestResults);
+});
+
+// --- INICIO DEL SERVIDOR ---
+
+app.listen(PORT, () => {
+    console.log(`\n\x1b[32m[SERVER ONLINE]\x1b[0m Dashboard activo en: http://localhost:${PORT}`);
+    console.log(`Abre tu navegador para controlar el Sniper.`);
+    
+    // Inicialización de datos meteorológicos
+    console.log("Cargando pronósticos iniciales...");
+    updateAllForecasts();
+    updateAllTAFs();
+    auditAllDailyHighs();
+
+    // Tareas programadas de fondo
+    setInterval(updateAllForecasts, 1800000); // 30 min
+    setInterval(auditAllDailyHighs, 300000);  // 5 min
+    setInterval(updateAllTAFs, 600000);       // 10 min
+});
