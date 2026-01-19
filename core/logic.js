@@ -1,4 +1,4 @@
-const { COLORS, getRemainingData } = require('../helpers');
+const { COLORS, getRemainingData } = require('../utils/helpers');
 
 function parseTAFForMax(rawTaf) {
     if (!rawTaf) return null;
@@ -61,7 +61,11 @@ function getSniperSignal(reachProb, breakProb, dev, trendArrow, isCalibrating, t
     const isDown = trendArrow.includes("↓");
     const safeDev = dev !== null ? dev : 0;
 
-    if (breakProb >= 98 || (breakChance >= 85 && !isDown)) return `SCALP BREAK (${breakProb}%)`;
+    // --- CORRECCIÓN AQUÍ ---
+    // Antes decía: (breakChance >= 85 ...) -> ERROR
+    // Ahora dice:  (breakProb >= 85 ...)  -> CORRECTO
+    if (breakProb >= 98 || (breakProb >= 85 && !isDown)) return `SCALP BREAK (${breakProb}%)`;
+    
     if (reachProb >= 80 && safeDev >= -0.5 && !isDown) return `BUY REACH (${reachProb}%)`;
     if (reachProb >= 70 && safeDev >= 0 && !isDown) return `BUY REACH (${reachProb}%)`;
     if (reachProb < 40 || safeDev < -1.5 || isDown) return "NO TRADE";
@@ -76,16 +80,21 @@ function calculateEdge(myProb, marketPrice) {
 }
 
 function calculateStake(myProb, marketPrice, bankroll, kellyFraction) {
-    if (!marketPrice || marketPrice <= 0 || marketPrice >= 1) return 0;
+    if (!marketPrice || marketPrice <= 0 || marketPrice >= 0.85) return 0; // Si cuesta más de 85¢, NO entramos.
     
     const p = myProb / 100;
-    if (p <= marketPrice) return 0;
+    
+    // 2. Filtro de Edge Mínimo
+    // Si la ventaja es menor al 2%, no vale la pena el riesgo operativo
+    if ((p - marketPrice) < 0.02) return 0;
 
-    const b = (1 / marketPrice) - 1;
+    const b = (1 / marketPrice) - 1; // Cuotas netas (Odds)
     const q = 1 - p;
     
+    // 3. Fórmula de Kelly
     const f = (b * p - q) / b;
     
+    // 4. Aplicar fracción y Bankroll
     const stake = f * kellyFraction * bankroll;
     
     return Math.max(0, stake).toFixed(2);
