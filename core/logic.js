@@ -11,11 +11,13 @@ function parseTAFForMax(rawTaf) {
     return null;
 }
 
-function calculateBenchmarkProb(current, targetMax, benchmarkTemp, windDir, clouds, tz, targetObj, trendState, tafMax, isRaining) {
+function calculateBenchmarkProb(current, targetMax, benchmarkTemp, windDir, clouds, tz, targetObj, trendState, tafMax, isRaining, high24h) {
     if (benchmarkTemp === null) return 0;
     if (isRaining && current < targetMax) return 0;
-    if (tafMax !== null && tafMax >= targetMax) return 99;
+    
     if (current >= targetMax) return 100;
+
+    if (tafMax !== null && tafMax >= targetMax) return 99;
 
     let score = 0;
     const distanceToMax = targetMax - current;
@@ -23,11 +25,22 @@ function calculateBenchmarkProb(current, targetMax, benchmarkTemp, windDir, clou
     let performancePenalty = 1.0; 
     
     const deviation = current - benchmarkTemp; 
-    if (deviation >= 0) performanceBonus = Math.min(20, deviation * 5); 
-    else {
+    
+    if (deviation >= 0) {
+        performanceBonus = Math.min(20, deviation * 5); 
+    } else {
         const localHour = parseInt(new Date().toLocaleString("en-US", {timeZone: tz, hour: 'numeric', hour12: false}));
-        if (localHour < 12) performancePenalty = Math.max(0.5, 1.0 - (Math.abs(deviation) * 0.1));
-        else if (localHour >= 14) performancePenalty = Math.max(0, 1.0 - (Math.abs(deviation) * 0.4)); 
+        
+        let capacityBonus = 0;
+        if (high24h !== undefined && high24h >= (targetMax - 2)) {
+             capacityBonus = 0.2;
+        }
+
+        if (localHour < 12) {
+            performancePenalty = Math.max(0.5, 1.0 - (Math.abs(deviation) * 0.1) + capacityBonus);
+        } else if (localHour >= 14) {
+            performancePenalty = Math.max(0, 1.0 - (Math.abs(deviation) * 0.4)); 
+        }
     }
 
     if (distanceToMax <= 0) score += 40; 
@@ -61,11 +74,7 @@ function getSniperSignal(reachProb, breakProb, dev, trendArrow, isCalibrating, t
     const isDown = trendArrow.includes("↓");
     const safeDev = dev !== null ? dev : 0;
 
-    // --- CORRECCIÓN AQUÍ ---
-    // Antes decía: (breakChance >= 85 ...) -> ERROR
-    // Ahora dice:  (breakProb >= 85 ...)  -> CORRECTO
     if (breakProb >= 98 || (breakProb >= 85 && !isDown)) return `SCALP BREAK (${breakProb}%)`;
-    
     if (reachProb >= 80 && safeDev >= -0.5 && !isDown) return `BUY REACH (${reachProb}%)`;
     if (reachProb >= 70 && safeDev >= 0 && !isDown) return `BUY REACH (${reachProb}%)`;
     if (reachProb < 40 || safeDev < -1.5 || isDown) return "NO TRADE";
@@ -80,21 +89,15 @@ function calculateEdge(myProb, marketPrice) {
 }
 
 function calculateStake(myProb, marketPrice, bankroll, kellyFraction) {
-    if (!marketPrice || marketPrice <= 0 || marketPrice >= 0.85) return 0; // Si cuesta más de 85¢, NO entramos.
+    if (!marketPrice || marketPrice <= 0 || marketPrice >= 0.85) return 0;
     
     const p = myProb / 100;
-    
-    // 2. Filtro de Edge Mínimo
-    // Si la ventaja es menor al 2%, no vale la pena el riesgo operativo
     if ((p - marketPrice) < 0.02) return 0;
 
-    const b = (1 / marketPrice) - 1; // Cuotas netas (Odds)
+    const b = (1 / marketPrice) - 1;
     const q = 1 - p;
     
-    // 3. Fórmula de Kelly
     const f = (b * p - q) / b;
-    
-    // 4. Aplicar fracción y Bankroll
     const stake = f * kellyFraction * bankroll;
     
     return Math.max(0, stake).toFixed(2);

@@ -17,9 +17,48 @@ let latestResults = [];
 let history = {};
 let arrowCache = {};
 let hourlyForecasts = {}; 
-let dailyHighs = {}; 
+let dailyHighs = {};
+let rollingHighs = {};
 let tafData = {}; 
 let dailyEventLog = {}; 
+
+async function auditAllDailyHighs() {
+    console.log(`\n\x1b[36m[AUDITORÍA] Analizando historial (Calendario vs Inercia 24h)...\x1b[0m`);
+    for (const t of TARGETS) {
+        try {
+            const data = await fetchDailyHistory(t.icao, t.tz);
+            if (data && data.length > 0) {
+                const cityDay = new Date().toLocaleString("en-US", {timeZone: t.tz, day: 'numeric'});
+                
+                let maxCalendar = -999;
+                let maxRolling = -999;
+                let countToday = 0;
+
+                data.forEach(r => {
+                    if (r.temp > maxRolling) maxRolling = r.temp;
+
+                    const reportDay = new Date(r.reportTime).toLocaleString("en-US", {timeZone: t.tz, day: 'numeric'});
+                    if (reportDay === cityDay) {
+                        countToday++;
+                        if (r.temp > maxCalendar) maxCalendar = r.temp;
+                    }
+                });
+
+                if (maxRolling > -999) rollingHighs[t.id] = maxRolling;
+                
+                if (maxCalendar > -999) {
+                    dailyHighs[t.id] = maxCalendar;
+                    console.log(`✅ ${t.id}: Hoy ${maxCalendar}°C (${countToday} reps) | Inercia 24h: ${maxRolling}°C`);
+                } else {
+                    dailyHighs[t.id] = null; 
+                    console.log(`⚠️ ${t.id}: Nuevo día detectado. Sin reportes calendario aún.`);
+                }
+            }
+        } catch (err) {
+            console.log(`❌ Error auditando ${t.id}:`, err.message);
+        }
+    }
+}
 
 function getCurrentBenchmark(target) {
     if (!hourlyForecasts[target.id] || hourlyForecasts[target.id].length === 0) return null;
@@ -51,23 +90,6 @@ async function updateAllTAFs() {
     }
 }
 
-async function auditAllDailyHighs() {
-    for (const t of TARGETS) {
-        const data = await fetchDailyHistory(t.icao, t.tz);
-        if (data && data.length > 0) {
-            const day = new Date().toLocaleString("en-US", {timeZone: t.tz, day: 'numeric'});
-            let max = -999;
-            data.forEach(r => {
-                if (new Date(r.reportTime).toLocaleString("en-US", {timeZone: t.tz, day: 'numeric'}) === day) {
-                    if (r.temp > max) max = r.temp;
-                }
-            });
-            if (max > -999) dailyHighs[t.id] = max;
-        }
-    }
-}
-
-
 async function checkTarget(target) {
     try {
         const data = await fetchMetar(target.icao);
@@ -95,26 +117,22 @@ async function checkTarget(target) {
         try {
             if (typeof fetchDynamicPrice === 'function') {
                 const marketData = await fetchDynamicPrice(target.polySlug, target.tz, tempForPoly);
-                
                 if (marketData && marketData.primary !== null) {
                     polyPrice = marketData.primary;
                     const rawHedges = marketData.hedges || [];
-                    hedgeInfo = rawHedges.filter(h => h.max >= tempForPoly && h.min <= (tempForPoly + 3.0)).slice(0, 2);
+                    const buffer = 3.0; 
+                    hedgeInfo = rawHedges.filter(h => {
+                        if (h.max < tempForPoly) return false;
+                        if (h.min > (tempForPoly + buffer)) return false;
+                        return true;
+                    });
+                    hedgeInfo = hedgeInfo.slice(0, 2);
                 } else if (marketData && marketData.error) {
-                    const errorMsgs = {
-                        "URL_404_OR_NETWORK": "🌐 URL no encontrada (¿Evento no creado aún?)",
-                        "RANGE_NOT_IN_LIST": `🚫 El rango para ${tempForPoly}${target.unit} no existe en la lista.`,
-                        "RANGE_PAUSED_OR_REVIEW": "⚠️ Mercado encontrado pero está en REVIEW/PAUSA.",
-                        "EVENT_NOT_FOUND": "❌ El evento existe pero no tiene mercados activos."
-                    };
-                    console.log(`\n\x1b[33m[DEBUG No Mkt - ${target.id}]\x1b[0m ${errorMsgs[marketData.error] || marketData.error}`);
+                    // console.log(`Debug ${target.id}: ${marketData.error}`);
                 }
             }
-        } catch (polyError) {
-            console.error(`\n\x1b[31m[ERROR POLY - ${target.id}]\x1b[0m`, polyError.message);
-        }
+        } catch (polyError) {}
 
-        // 5. Señales y Clima
         const isRaining = /(RA|DZ|TS|GR|PL)/.test(d.wxString || "");
         const benchmarkC = getCurrentBenchmark(target);
 
@@ -140,9 +158,12 @@ async function checkTarget(target) {
 
         let reachChance = 0;
         let breakChance = 0;
+        
+        const rollingMax = rollingHighs[target.id] || curC;
+
         if (!isCalibrating) {
-            reachChance = calculateBenchmarkProb(curC, maxTarget, benchmarkC, d.wdir, d.clouds, target.tz, target, trendArrow, tafMaxVal, isRaining);
-            breakChance = calculateBenchmarkProb(curC, maxTarget + 0.5, benchmarkC, d.wdir, d.clouds, target.tz, target, trendArrow, tafMaxVal, isRaining);
+            reachChance = calculateBenchmarkProb(curC, maxTarget, benchmarkC, d.wdir, d.clouds, target.tz, target, trendArrow, tafMaxVal, isRaining, rollingMax);
+            breakChance = calculateBenchmarkProb(curC, maxTarget + 0.5, benchmarkC, d.wdir, d.clouds, target.tz, target, trendArrow, tafMaxVal, isRaining, rollingMax);
         }
 
         const devValue = benchmarkC !== null ? (curC - benchmarkC) : null;
@@ -151,6 +172,15 @@ async function checkTarget(target) {
 
         const stake = calculateStake(reachChance, polyPrice, BANKROLL, KELLY_FRACTION);
         const edgeVal = calculateEdge(reachChance, polyPrice);
+
+        let baseScore = 0;
+        if (signalText.includes("PREDICTION")) baseScore = 5000;
+        else if (signalText.includes("SCALP")) baseScore = 4000;
+        else if (signalText.includes("REACH")) baseScore = 3000;
+        else if (signalText.includes("WAIT")) baseScore = 1000;
+        else baseScore = 0;
+        const edgeBonus = parseFloat(edgeVal) > 0 ? parseFloat(edgeVal) * 50 : 0;
+        const finalScore = baseScore + edgeBonus + reachChance;
 
         if (!isCalibrating && !signalText.includes("RAIN")) {
             const currentDay = new Date().toLocaleString("en-US", {timeZone: target.tz, day: 'numeric'});
@@ -188,7 +218,7 @@ async function checkTarget(target) {
         history[target.id + '_lastBreak'] = breakChance;
         history[target.id + '_lastReach'] = reachChance;
 
-        const highSoFar = dailyHighs[target.id] || curC;
+        const highSoFar = (dailyHighs[target.id] !== undefined && dailyHighs[target.id] !== null) ? Math.max(dailyHighs[target.id], curC) : curC;
         
         let devDisp = "--";
         if (benchmarkC !== null) {
@@ -201,17 +231,6 @@ async function checkTarget(target) {
         if (hedgeInfo && hedgeInfo.length > 0) {
             hedgeStr = hedgeInfo.map(h => `${h.title} (${(h.price*100).toFixed(0)}¢)`).join(" / ");
         }
-
-        let baseScore = 0;
-        
-        if (signalText.includes("PREDICTION")) baseScore = 5000;
-        else if (signalText.includes("SCALP")) baseScore = 4000;
-        else if (signalText.includes("REACH")) baseScore = 3000;
-        else if (signalText.includes("WAIT")) baseScore = 1000;
-        else baseScore = 0;
-
-        const edgeBonus = parseFloat(edgeVal) > 0 ? parseFloat(edgeVal) * 50 : 0;
-        const finalScore = baseScore + edgeBonus + reachChance;
 
         return {
             id: target.id,
@@ -229,12 +248,10 @@ async function checkTarget(target) {
             hedge: hedgeStr,
             fullSlug: cleanSlug,
             timer: getRemainingData(target.tz).str,
-            score: (parseFloat(edgeVal) > 0 ? parseFloat(edgeVal) * 10 : 0) + reachChance,
             score: finalScore
         };
 
     } catch (e) { 
-        console.error(`[CRITICAL ERROR] Target ${target.id} falló:`, e);
         return null; 
     }
 }
@@ -263,11 +280,11 @@ app.get('/api/data', (req, res) => {
     res.json(latestResults);
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
     console.log(`\n\x1b[32m[SERVER ONLINE]\x1b[0m http://localhost:${PORT}`);
-    updateAllForecasts();
-    updateAllTAFs();
-    auditAllDailyHighs();
+    await updateAllForecasts();
+    await updateAllTAFs();
+    await auditAllDailyHighs(); 
     setInterval(updateAllForecasts, 1800000); 
     setInterval(auditAllDailyHighs, 300000);  
     setInterval(updateAllTAFs, 600000);       
