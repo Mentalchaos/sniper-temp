@@ -1,6 +1,6 @@
 const API_KEY = 'e1f10a1e78da46f5b10a1e78da96f525';
 
-const BANKROLL = 250;
+const BANKROLL = 295;
 const KELLY_FRACTION = 0.5;
 
 const TARGETS = [

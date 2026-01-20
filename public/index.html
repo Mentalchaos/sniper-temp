@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>SNIPER V68</title>
+    <title>SNIPER DASHBOARD V86 - ESCOLTA</title>
     <style>
         body { background-color: #0d1117; color: #c9d1d9; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 20px; }
         h1 { color: #f0a500; text-align: center; font-size: 24px; margin-bottom: 20px; letter-spacing: 1px; }
@@ -23,16 +23,19 @@
         .val-cyan { color: #388bfd; }
         .val-gold { color: #e3b341; font-size: 11px; }
         
+        /* ESTILOS DE SEÑALES */
         .sig-badge { padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+        .sig-bank { background: #d29922; color: #fff; border: 1px solid #e3b341; box-shadow: 0 0 8px #d29922; animation: pulse 2s infinite; }
         .sig-pred { background: #6e40c9; color: #fff; border: 1px solid #8957e5; box-shadow: 0 0 5px #8957e5; }
         .sig-break { background: #b31d28; color: #fff; border: 1px solid #fdaeb7; animation: pulse 1.5s infinite; }
         .sig-reach { background: #1f6feb; color: #fff; border: 1px solid #388bfd; }
         .sig-wait { background: #30363d; color: #8b949e; }
         .sig-rain { background: #161b22; color: #58a6ff; border: 1px solid #1f6feb; }
         
+        /* SEÑAL DE SALIDA (EXIT) */
+        .sig-exit { background: #ff0000; color: #fff; border: 1px solid #ff4444; animation: flash 0.5s infinite; font-weight: 900; }
+
         .stake-box { background: #238636; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-family: monospace; }
-        
-        /* AUMENTO DE FUENTE PARA EL EDGE */
         .edge-info { font-size: 13px; color: #a2a9b1; margin-top: 4px; font-weight: 500; }
         
         .trade-btn { 
@@ -41,16 +44,26 @@
         }
         .trade-btn:hover { background: #30363d; color: #fff; }
 
+        /* BOTÓN DE TRACKING */
+        .track-btn {
+            background: transparent; border: 1px solid #30363d; color: #8b949e;
+            padding: 5px 10px; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 11px; transition: 0.2s;
+        }
+        .track-btn.active {
+            background: #f0a500; color: #0d1117; border-color: #f0a500; box-shadow: 0 0 5px #f0a500;
+        }
+
         .toast {
             position: fixed; bottom: 20px; right: 20px; background: #238636; color: #fff;
             padding: 10px 20px; border-radius: 4px; opacity: 0; transition: opacity 0.3s; pointer-events: none;
         }
         
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.8; } 100% { opacity: 1; } }
+        @keyframes flash { 0% { background-color: #ff0000; } 50% { background-color: #500000; } 100% { background-color: #ff0000; } }
     </style>
 </head>
 <body>
-    <h1>SNIPER V68</h1>
+    <h1>SNIPER V86 - ESCOLTA</h1>
     <div class="controls">
         <button id="startBtn" onclick="toggleBot(true)">▶ ACTIVAR SISTEMA</button>
         <button id="stopBtn" onclick="toggleBot(false)">⏹ DETENER</button>
@@ -64,10 +77,10 @@
                 <th>Dev</th>
                 <th>Tend</th>
                 <th>Max Hoy</th>
+                <th>Target (Exp)</th> 
                 <th>Señal Sniper</th>
                 <th>Stake / Edge</th>
-                <th>Hedges</th>
-                <th>Acción</th>
+                <th>Posición</th> <th>Acción</th>
             </tr>
         </thead>
         <tbody id="tableBody"></tbody>
@@ -77,9 +90,40 @@
 
     <script>
         let isRunning = false;
+
+        function startLocalTimer() {
+            setInterval(() => {
+                const timerElements = document.querySelectorAll('.timer-cell');
+                timerElements.forEach(el => {
+                    const parts = el.innerText.split(':');
+                    if (parts.length === 3) {
+                        let h = parseInt(parts[0]), m = parseInt(parts[1]), s = parseInt(parts[2]);
+                        let totalSeconds = h * 3600 + m * 60 + s;
+                        if (totalSeconds > 0) {
+                            totalSeconds--;
+                            let nh = Math.floor(totalSeconds / 3600);
+                            let nm = Math.floor((totalSeconds % 3600) / 60);
+                            let ns = totalSeconds % 60;
+                            el.innerText = `${String(nh).padStart(2, '0')}:${String(nm).padStart(2, '0')}:${String(ns).padStart(2, '0')}`;
+                        }
+                    }
+                });
+            }, 1000);
+        }
+        startLocalTimer();
+
         async function toggleBot(state) {
             await fetch(state ? '/api/start' : '/api/stop', { method: 'POST' });
             isRunning = state;
+        }
+
+        async function toggleTrack(cityId) {
+            await fetch('/api/track', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: cityId })
+            });
+            update(); // Refrescar rápido
         }
 
         function formatTemp(unit, val) {
@@ -90,13 +134,17 @@
         function getSignalHtml(signal) {
             let icon = "";
             let cssClass = "sig-wait";
-            if (signal.includes("PREDICTION")) { icon = "🔮"; cssClass = "sig-pred"; }
+
+            if (signal.includes("EXIT")) { icon = "🚨"; cssClass = "sig-exit"; }
+            else if (signal.includes("BANK")) { icon = "💰"; cssClass = "sig-bank"; }
+            else if (signal.includes("PREDICTION")) { icon = "🔮"; cssClass = "sig-pred"; }
             else if (signal.includes("SCALP") || signal.includes("BREAK")) { icon = "🔥"; cssClass = "sig-break"; }
             else if (signal.includes("REACH")) { icon = "🎯"; cssClass = "sig-reach"; }
             else if (signal.includes("RAIN")) { icon = "🌧️"; cssClass = "sig-rain"; }
             else if (signal.includes("NO TRADE")) { icon = "⛔"; cssClass = "sig-wait"; }
             else if (signal.includes("WAIT")) { icon = "✋"; cssClass = "sig-wait"; }
             else if (signal.includes("CALIBRATING")) { icon = "⏳"; cssClass = "sig-wait"; }
+            
             return `<span class="sig-badge ${cssClass}">${icon} ${signal}</span>`;
         }
 
@@ -123,6 +171,9 @@
                 const res = await fetch('/api/data');
                 const data = await res.json();
                 const body = document.getElementById('tableBody');
+                
+                if (!data || data.length === 0) return;
+
                 body.innerHTML = '';
                 
                 data.forEach(d => {
@@ -138,19 +189,25 @@
                         ? `<span class="stake-box">$${d.stake}</span>` 
                         : `<span style="color:#555">--</span>`;
 
+                    // Botón de Tracking
+                    const trackBtn = `<button onclick="toggleTrack('${d.id}')" class="track-btn ${d.isTracking ? 'active' : ''}">
+                        ${d.isTracking ? '🛰️ TRACKING' : 'TRACK'}
+                    </button>`;
+
                     tr.innerHTML = `
                         <td style="font-weight:bold; color:#e6edf3">${d.id}</td>
-                        <td style="color:#8b949e">${d.timer}</td>
+                        <td class="timer-cell" style="color:#8b949e">${d.timer}</td> 
                         <td class="val-cyan">${formatTemp(d.unit, d.curC)}</td>
                         <td class="${parseFloat(d.devDisp) >= 0 ? 'val-green' : 'val-red'}">${d.devDisp}</td>
                         <td>${d.trend}</td>
                         <td style="color:#d2a8ff; font-weight:bold">${formatTemp(d.unit, d.high)}</td>
+                        <td style="color:#f0a500; font-weight:bold">${d.targetDisp || '--'}</td>
                         <td>${getSignalHtml(d.signal)}</td>
                         <td>
                             ${stakeDisplay} 
                             <div class="edge-info">${d.priceDisp}</div>
                         </td>
-                        <td class="val-gold">${d.hedge}</td>
+                        <td>${trackBtn}</td>
                         <td>${tradeHtml}</td>
                     `;
                     body.appendChild(tr);
