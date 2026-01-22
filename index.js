@@ -27,7 +27,9 @@ let rollingHighs = {};
 let tafData = {}; 
 let dailyEventLog = {}; 
 
-// --- RUTAS DE TRACKING ---
+// --- HELPER PARA DELAY ---
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 app.post('/api/track', (req, res) => {
     const { id } = req.body;
     if (trackedCities.includes(id)) {
@@ -40,9 +42,7 @@ app.post('/api/track', (req, res) => {
     res.json({ trackedCities });
 });
 
-app.get('/api/tracked', (req, res) => {
-    res.json(trackedCities);
-});
+app.get('/api/tracked', (req, res) => res.json(trackedCities));
 
 function getWeatherIcon(phrase) {
     if (!phrase) return "";
@@ -58,7 +58,6 @@ function getCardinalDirection(deg) {
     if (deg === null || deg === undefined || deg === "VRB") return null;
     const d = parseFloat(deg);
     if (isNaN(d)) return null;
-    
     if (d >= 315 || d < 45) return "N";
     if (d >= 45 && d < 135) return "E";
     if (d >= 135 && d < 225) return "S";
@@ -75,24 +74,14 @@ async function auditAllDailyHighs() {
                 const cityDay = new Date().toLocaleString("en-US", {timeZone: t.tz, day: 'numeric'});
                 let maxCalendar = -999; 
                 let maxRolling = -999;  
-                let countToday = 0;
-
                 data.forEach(r => {
                     if (r.temp > maxRolling) maxRolling = r.temp;
                     const reportDay = new Date(r.reportTime).toLocaleString("en-US", {timeZone: t.tz, day: 'numeric'});
-                    if (reportDay === cityDay) {
-                        countToday++;
-                        if (r.temp > maxCalendar) maxCalendar = r.temp;
-                    }
+                    if (reportDay === cityDay) if (r.temp > maxCalendar) maxCalendar = r.temp;
                 });
-
                 if (maxRolling > -999) rollingHighs[t.id] = maxRolling;
-                if (maxCalendar > -999) {
-                    dailyHighs[t.id] = maxCalendar;
-                    console.log(`✅ ${t.id}: Hoy ${maxCalendar}°C | Inercia 24h: ${maxRolling}°C`);
-                } else {
-                    dailyHighs[t.id] = null; 
-                }
+                if (maxCalendar > -999) dailyHighs[t.id] = maxCalendar;
+                else dailyHighs[t.id] = null; 
             }
         } catch (err) { console.log(`❌ Error auditando ${t.id}:`, err.message); }
     }
@@ -129,12 +118,11 @@ async function updateAllTAFs() {
 }
 
 async function checkTarget(target) {
-  console.log(`🔄 Procesando ${target.id}...`); // <--- AGREGA ESTO
     try {
         const data = await fetchMetar(target.icao);
         if (!data || !data[0]) {
-          console.log(`⚠️ Falló METAR para ${target.id}`); // <--- AGREGA ESTO
-          return null;
+            console.log(`⚠️ SKIP ${target.id}: No llegó data METAR`); 
+            return null;
         }
         
         const d = data[0];
@@ -152,45 +140,37 @@ async function checkTarget(target) {
              }
         }
 
-        // --- 2. ADVECCIÓN TÉRMICA (UPSTREAM) ---
+        // --- 2. ADVECCIÓN ---
         let advectionBonus = 0;
-        
         if (d.wdir !== "VRB") {
             const card = getCardinalDirection(d.wdir);
             if (card && UPSTREAM_MAP[target.icao] && UPSTREAM_MAP[target.icao][card]) {
                 const upstreamICAO = UPSTREAM_MAP[target.icao][card];
                 const upData = await fetchMetar(upstreamICAO);
                 if (upData && upData[0]) {
-                    const upTemp = upData[0].temp;
-                    const diff = upTemp - curC;
-                    if (diff >= 1.2) {
-                        advectionBonus = 12; 
-                    } 
-                    else if (diff <= -1.2) {
-                        advectionBonus = -15; 
-                    }
+                    const diff = upData[0].temp - curC;
+                    if (diff >= 1.2) advectionBonus = 12; 
+                    else if (diff <= -1.2) advectionBonus = -15; 
                 }
             }
         }
 
-        // --- 3. TARGET HÍBRIDO ---
+        // --- 3. TARGET ---
         let maxTarget = -999;
         let isCalibrating = true;
         if (hourlyForecasts[target.id] && hourlyForecasts[target.id].length > 0) {
             const ibmMax = Math.max(...hourlyForecasts[target.id].map(f => f.temp));
             if (consensusData[target.id]) {
-                const conMax = consensusData[target.id].val.avg;
-                maxTarget = (ibmMax + conMax) / 2; 
+                maxTarget = (ibmMax + consensusData[target.id].val.avg) / 2; 
             } else {
                 maxTarget = ibmMax;
             }
             isCalibrating = false;
         }
 
-        // --- 4. CÁLCULO DE SESGO (BIAS) ---
+        // --- 4. BIAS ---
         const benchmarkC = getCurrentBenchmark(target); 
         let biasBonus = 0;
-
         if (benchmarkC !== null) {
             const currentBias = curC - benchmarkC;
             if (Math.abs(currentBias) >= 0.5) {
@@ -199,16 +179,12 @@ async function checkTarget(target) {
             }
         }
 
-        // --- 5. VOLATILIDAD (DEW POINT SPREAD) ---
+        // --- 5. SPREAD ---
         let spreadBonus = 0;
         if (curC !== undefined && dewC !== undefined) {
             const spread = curC - dewC;
-            if (spread < 3) {
-                spreadBonus = -15; // Húmedo/Pegajoso
-            } 
-            else if (spread > 10) {
-                spreadBonus = 10; // Seco/Volátil
-            }
+            if (spread < 3) spreadBonus = -15; 
+            else if (spread > 10) spreadBonus = 10; 
         }
 
         const searchTemp = isCalibrating ? curC : maxTarget;
@@ -220,7 +196,7 @@ async function checkTarget(target) {
             highForPoly = (highForPoly * 9/5) + 32;
         }
 
-        // --- HORA PICO + CONDICIONES ---
+        // --- HORA PICO ---
         let peakTimeStr = "";
         let isPastPeak = false;
         let peakConditionIcon = ""; 
@@ -231,7 +207,6 @@ async function checkTarget(target) {
         if (hourlyForecasts[target.id] && hourlyForecasts[target.id].length > 0) {
             const forecasts = hourlyForecasts[target.id];
             const maxFcst = forecasts.reduce((prev, current) => (prev.temp > current.temp) ? prev : current);
-            
             if (maxFcst) {
                 const pDate = new Date(maxFcst.fcst_valid_local);
                 const pHour = pDate.getHours();
@@ -239,10 +214,8 @@ async function checkTarget(target) {
                 const localDate = new Date(new Date().toLocaleString("en-US", {timeZone: target.tz}));
                 const localHour = localDate.getHours();
                 if (localHour > pHour) isPastPeak = true;
-
                 const phrase = maxFcst.phrase_32char || maxFcst.wx_phrase || "";
                 peakConditionIcon = getWeatherIcon(phrase);
-                
                 if (peakConditionIcon === "❄️") isSnowForecast = true;
                 if (peakConditionIcon === "☀️") isSunForecast = true;
                 if (peakConditionIcon === "❄️" || peakConditionIcon === "🌧️") isPrecipitationForecasted = true;
@@ -275,7 +248,6 @@ async function checkTarget(target) {
         } catch (polyError) {}
 
         const isRaining = /(RA|DZ|TS|GR|PL)/.test(d.wxString || "");
-        
         if (!arrowCache[target.id]) {
             if (prevD) {
                 if (curC > prevD.temp) arrowCache[target.id] = "↑";
@@ -283,11 +255,7 @@ async function checkTarget(target) {
                 else arrowCache[target.id] = "→";
             } else arrowCache[target.id] = "→";
         }
-        if (history[target.id] !== undefined) {
-            if (curC > history[target.id]) arrowCache[target.id] = "↑";
-            else if (curC < history[target.id]) arrowCache[target.id] = "↓";
-        }
-        let trendArrow = arrowCache[target.id];
+        let trendArrow = arrowCache[target.id] || "→";
 
         let tafMaxVal = null;
         let tafConfirmed = false;
@@ -298,19 +266,15 @@ async function checkTarget(target) {
 
         let reachChance = 0;
         let breakChance = 0;
-        
         const rollingMax = rollingHighs[target.id] || curC;
         const highSoFar = (dailyHighs[target.id] !== undefined && dailyHighs[target.id] !== null) ? Math.max(dailyHighs[target.id], curC) : curC;
 
         if (!isCalibrating) {
             reachChance = calculateBenchmarkProb(curC, maxTarget, benchmarkC, d.wdir, d.clouds, target.tz, target, trendArrow, tafMaxVal, isRaining, rollingMax, highSoFar);
             breakChance = calculateBenchmarkProb(curC, maxTarget + 0.5, benchmarkC, d.wdir, d.clouds, target.tz, target, trendArrow, tafMaxVal, isRaining, rollingMax, highSoFar);
-            
-            // --- SUMATORIA DE PROBABILIDADES (INTERNA) ---
-            reachChance += advectionBonus; // Advección
-            reachChance += biasBonus;      // Sesgo
-            reachChance += spreadBonus;    // Volatilidad (Spread)
-            
+            reachChance += advectionBonus; 
+            reachChance += biasBonus;      
+            reachChance += spreadBonus;    
             reachChance = Math.min(100, Math.max(0, reachChance));
         }
 
@@ -318,14 +282,11 @@ async function checkTarget(target) {
         if (strategyUsed === "BANKING" && polyPrice && polyPrice < 0.90) {
             const distToCeiling = bucketMax ? (bucketMax - highForPoly) : 99;
             let dangerZone = (distToCeiling < 1.0 && (trendArrow === "↑" || trendArrow === "↗"));
-            
             if (biasBonus > 10) dangerZone = true;
             if (advectionBonus > 0) dangerZone = true;
             if (spreadBonus > 0) dangerZone = true; 
-
             if (isSnowForecast && distToCeiling > 0.3) dangerZone = false; 
             if (spreadBonus < 0 && distToCeiling > 0.5) dangerZone = false;
-
             if (isSunForecast && distToCeiling < 1.5 && (trendArrow === "↑" || trendArrow === "↗")) dangerZone = true;
 
             const timeRisk = !isPastPeak;
@@ -335,21 +296,13 @@ async function checkTarget(target) {
                 reachChance = 99; 
             } else {
                 strategyUsed = "PRED"; 
-                if (timeRisk && distToCeiling < 3.0) {
-                     reachChance = 45; 
-                     signalRaw = "⚠️ WAIT PEAK"; 
-                } 
-                else if (dangerZone) {
-                    reachChance = 0;
-                    signalRaw = "⛔ CEILING RISK";
-                }
+                if (timeRisk && distToCeiling < 3.0) { reachChance = 45; signalRaw = "⚠️ WAIT PEAK"; } 
+                else if (dangerZone) { reachChance = 0; signalRaw = "⛔ CEILING RISK"; }
             }
         }
 
         const devValue = benchmarkC !== null ? (curC - benchmarkC) : null;
         let signalRaw = "";
-        
-        // --- 4. ALERTA DE SALIDA ---
         const isUserTracking = trackedCities.includes(target.id);
         let exitAlert = false;
         let exitReason = "";
@@ -358,7 +311,6 @@ async function checkTarget(target) {
             if (radarStatus.incoming && !isPrecipitationForecasted) { exitAlert = true; exitReason = "RAIN - EXIT!"; }
             if (reachChance < 35 && !isCalibrating) { exitAlert = true; exitReason = "LOW PROB - EXIT!"; }
             if (advectionBonus < -10) { exitAlert = true; exitReason = "COLD FRONT - EXIT!"; }
-            // Si entra humedad de golpe, la volatilidad muere. Salir si buscábamos un Break.
             if (spreadBonus < -10 && strategyUsed !== "BANKING") { exitAlert = true; exitReason = "HUMIDITY - STUCK!"; }
 
             if (exitAlert) {
@@ -374,20 +326,22 @@ async function checkTarget(target) {
 
         // INTERVENCIÓN DEL RADAR
         if (!exitAlert && radarStatus.incoming && strategyUsed !== "BANKING") {
-            if (!isPrecipitationForecasted) {
-                reachChance = 0;
-                signalRaw = "🌧️ RADAR ALERT"; 
-                playSound('BLOOD'); 
-            }
+            if (!isPrecipitationForecasted) { reachChance = 0; signalRaw = "🌧️ RADAR ALERT"; playSound('BLOOD'); }
         }
         
+        // --- 🔴 CORRECCIÓN DE PRECIO ALTO ---
+        // Si el precio es >= 0.85 (85¢), ya no recomendamos Banking porque el riesgo no vale la pena.
         if (!exitAlert && strategyUsed === "BANKING" && reachChance > 90) {
-            signalRaw = `💰 BANK HIGH (${highForPoly.toFixed(0)})`;
+            if (polyPrice < 0.85) {
+                signalRaw = `💰 BANK HIGH (${highForPoly.toFixed(0)})`;
+            } else {
+                // Si está muy caro, lo marcamos como "PRICED OUT" para no confundir
+                signalRaw = "⛔ PRICED OUT";
+            }
         }
 
         let signalText = signalRaw.replace(/\x1b\[[0-9;]*m/g, "");
         const stake = calculateStake(reachChance, polyPrice, BANKROLL, KELLY_FRACTION);
-        const edgeVal = calculateEdge(reachChance, polyPrice);
 
         if (!isCalibrating && !signalText.includes("RAIN")) {
             const currentDay = new Date().toLocaleString("en-US", {timeZone: target.tz, day: 'numeric'});
@@ -404,35 +358,30 @@ async function checkTarget(target) {
         }
         
         if (history[target.id] !== undefined && curC !== history[target.id]) playSound('VILLAGER');
-
         history[target.id] = curC;
-        history[target.id + '_lastBreak'] = breakChance;
-        history[target.id + '_lastReach'] = reachChance;
 
         let devDisp = "--";
         if (benchmarkC !== null) {
              let diff = curC - benchmarkC; 
-             let diffDisplay = target.unit === 'F' ? (diff * 1.8).toFixed(1) : diff.toFixed(1);
-             devDisp = (diff > 0 ? "+" : "") + diffDisplay + "°";
-        }
-
-        let hedgeStr = "--";
-        if (hedgeInfo && hedgeInfo.length > 0) {
-            hedgeStr = hedgeInfo.map(h => `${h.title} (${(h.price*100).toFixed(0)}¢)`).join(" / ");
+             devDisp = (diff > 0 ? "+" : "") + (target.unit === 'F' ? (diff * 1.8).toFixed(1) : diff.toFixed(1)) + "°";
         }
 
         let targetDisp = (target.unit === 'F' ? (maxTarget * 9/5 + 32).toFixed(1) + "°F" : maxTarget.toFixed(1) + "°C");
-        if (peakTimeStr) {
-            targetDisp += ` <span style="font-size:11px; color:${isPastPeak ? '#8b949e' : '#e3b341'}">🕒${peakTimeStr} ${peakConditionIcon}</span>`;
-        }
+        if (peakTimeStr) targetDisp += ` <span style="margin-left: 5px; font-size:11px; color:${isPastPeak ? '#8b949e' : '#e3b341'}">🕒 ${peakTimeStr} ${peakConditionIcon}</span>`;
         if (radarStatus.incoming) {
-            const rainType = isPrecipitationForecasted ? "EXPECTED" : "SURPRISE";
             const color = isPrecipitationForecasted ? "#8b949e" : "#58a6ff"; 
-            targetDisp += ` <span style="font-size:10px; color:${color}">🌧️ ${rainType}</span>`;
+            targetDisp += ` <span style="font-size:10px; color:${color}">🌧️ ${isPrecipitationForecasted ? "EXPECTED" : "SURPRISE"}</span>`;
         }
-        
-        // --- MODO STEALTH: No mostramos los extras, pero están calculados arriba ---
-        // (El bloque de visualización de extras ha sido eliminado a petición del usuario)
+
+        const score = reachChance + (isUserTracking ? 10000 : 0);
+
+        const localTimeStr = new Date().toLocaleTimeString("en-US", {
+            timeZone: target.tz,
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false 
+        });
 
         return {
             id: target.id,
@@ -448,25 +397,34 @@ async function checkTarget(target) {
             signal: signalText,
             priceDisp: polyPrice ? `${marketTitle} (${(polyPrice * 100).toFixed(0)}¢)` : "No Mkt",
             stake: stake, 
-            hedge: hedgeStr,
+            hedge: "--",
             fullSlug: cleanSlug,
-            timer: getRemainingData(target.tz).str,
-            score: finalScore + (isUserTracking ? 10000 : 0),
+            timer: localTimeStr, 
+            score: score,
             isTracking: isUserTracking
         };
-
-    } catch (e) { 
-        return null; 
-    }
+    } catch (e) { return null; }
 }
 
 async function monitorLoop() {
     if (!isRunning) return;
-    const results = await Promise.all(TARGETS.map(t => checkTarget(t)));
-    const validResults = results.filter(r => r !== null);
+    
+    const results = [];
+    console.log("⏳ Iniciando ronda de escaneo...");
+    
+    for (const t of TARGETS) {
+        const res = await checkTarget(t);
+        if (res) results.push(res);
+        await sleep(1000); 
+    }
+
+    validResults = results;
     validResults.sort((a, b) => b.score - a.score);
     latestResults = validResults;
-    if (isRunning) setTimeout(monitorLoop, 3000);
+    
+    console.log(`✅ Ronda finalizada. ${validResults.length} ciudades procesadas.`);
+    
+    if (isRunning) setTimeout(monitorLoop, 1000); 
 }
 
 app.post('/api/start', (req, res) => {
@@ -488,8 +446,4 @@ app.listen(PORT, async () => {
     await updateAllForecasts();
     await updateAllTAFs();
     await auditAllDailyHighs(); 
-    setInterval(updateAllForecasts, 1800000); 
-    setInterval(auditAllDailyHighs, 300000);  
-    setInterval(updateAllTAFs, 600000);       
 });
-

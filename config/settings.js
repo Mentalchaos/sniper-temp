@@ -11,7 +11,9 @@ const TARGETS = [
     { id: 'NEW YORK', icao: 'KLGA', locId: 'KLGA:9:US', tz: "America/New_York", warmWind: [160, 250], unit: 'F', polySlug: "highest-temperature-in-nyc-on" },
     { id: 'SEATTLE', icao: 'KSEA', locId: 'KSEA:9:US', tz: "America/Los_Angeles", warmWind: [160, 240], unit: 'F', polySlug: "highest-temperature-in-seattle-on" },
     { id: 'ATLANTA', icao: 'KATL', locId: 'KATL:9:US', tz: "America/New_York", warmWind: [160, 240], unit: 'F', polySlug: "highest-temperature-in-atlanta-on" },
-    { id: 'DALLAS', icao: 'KDAL', locId: 'KDAL:9:US', tz: "America/Chicago", warmWind: [160, 240], unit: 'F', polySlug: "highest-temperature-in-dallas-on" }
+    { id: 'DALLAS', icao: 'KDAL', locId: 'KDAL:9:US', tz: "America/Chicago", warmWind: [160, 240], unit: 'F', polySlug: "highest-temperature-in-dallas-on" },
+    { id: 'ANKARA', icao: 'LTAC', locId: 'LTAC:9:TR', tz: "Europe/Istanbul", warmWind: [150, 240], unit: 'C', polySlug: "highest-temperature-in-ankara-on" },
+    { id: 'WELLINGTON', icao: 'NZWN', locId: 'NZWN:9:NZ', tz: "Pacific/Auckland", warmWind: [330, 30], unit: 'C', polySlug: "highest-temperature-in-wellington-on" }
 ];
 
 module.exports = { API_KEY, TARGETS, BANKROLL, KELLY_FRACTION };

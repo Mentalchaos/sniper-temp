@@ -1,54 +1,44 @@
-// config/upstream.js
 
-// Mapa de Advección Térmica (Upstream Weather) corregido para tus TARGETS específicos
-// N: Norte, S: Sur, E: Este, W: Oeste
 
 const UPSTREAM_MAP = {
-    // NUEVA YORK (LaGuardia - KLGA)
     "KLGA": {
-        N: "KPOU", // Poughkeepsie
-        S: "KACY", // Atlantic City
-        W: "KABE", // Allentown (Centinela clave del calor)
-        E: "KISP"  // Islip
+        N: "KPOU", 
+        S: "KACY", 
+        W: "KABE", 
+        E: "KISP" 
     },
 
-    // LONDRES (London City - EGLC)
     "EGLC": {
-        N: "EGSS", // Stansted
-        S: "EGKK", // Gatwick
-        W: "EGLL", // Heathrow (Funciona como upstream del Oeste para el centro)
-        E: "EGMC"  // Southend
+        N: "EGSS", 
+        S: "EGKK", 
+        W: "EGLL", 
+        E: "EGMC"  
     },
-
-    // SEÚL (Incheon - RKSI)
     "RKSI": {
-        N: "RKSS", // Gimpo (Está un poco al NE, sirve de referencia interior)
+        N: "RKSS", // Gimpo
         S: "RKSW", // Suwon
-        W: "RKSI", // Mar Amarillo (No hay estaciones fijas, usamos la misma para neutralizar)
+        W: "RKSI", // Mar Amarillo
         E: "RKSM"  // Seoul Base
     },
 
-    // TORONTO (Pearson - CYYZ)
     "CYYZ": {
         N: "CYQA", // Muskoka
-        S: "KBUF", // Buffalo (Crucial para aire caliente del sur)
+        S: "KBUF", // Buffalo
         W: "CYHM", // Hamilton
-        E: "CYTZ"  // Billy Bishop (Centro)
+        E: "CYTZ"  // Billy Bishop
     },
 
-    // SEATTLE (Sea-Tac - KSEA)
     "KSEA": {
         N: "KPAE", // Everett
         S: "KOLM", // Olympia
-        W: "KPWT", // Bremerton (Aire del Pacífico)
+        W: "KPWT", // Bremerton
         E: "KRNT"  // Renton
     },
 
-    // ATLANTA (Hartsfield - KATL)
     "KATL": {
         N: "KCHA", // Chattanooga
         S: "KMCN", // Macon
-        W: "KBHM", // Birmingham (Centinela clave del Oeste)
+        W: "KBHM", // Birmingham
         E: "KAHN"  // Athens
     },
 
@@ -62,10 +52,22 @@ const UPSTREAM_MAP = {
 
     // BUENOS AIRES (Ezeiza - SAEZ)
     "SAEZ": {
-        N: "SABE", // Aeroparque (Aire de la ciudad/norte)
-        S: "SAZP", // La Plata (Aproximado)
-        W: "SAOU", // Santa Rosa (Aire continental caliente)
-        E: "SULP"  // Colonia, Uruguay (Cruzando el río)
+        N: "SABE", // Aeroparque
+        S: "SAZP", // La Plata
+        W: "SAOU", // Santa Rosa
+        E: "SUMU"  // Montevideo (Carrasco) - Corrección SULP
+    },
+    "LTAC": {
+        N: "LTCM", // Sinop (Aire frío Mar Negro)
+        S: "LTAF", // Adana (Aire caliente sur)
+        W: "LTFM", 
+        E: "LTAR"  
+    },
+    "NZWN": {
+        N: "NZPM", 
+        S: "NZCH", 
+        W: "NZNS", 
+        E: "NZWN"  
     }
 };
 

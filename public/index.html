@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>SNIPER DASHBOARD V86 - ESCOLTA</title>
+    <title>SNIPER DASHBOARD V90 - STEALTH</title>
     <style>
         body { background-color: #0d1117; color: #c9d1d9; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 20px; }
         h1 { color: #f0a500; text-align: center; font-size: 24px; margin-bottom: 20px; letter-spacing: 1px; }
@@ -63,7 +63,7 @@
     </style>
 </head>
 <body>
-    <h1>SNIPER V86 - ESCOLTA</h1>
+    <h1>SNIPER V90 - STEALTH</h1>
     <div class="controls">
         <button id="startBtn" onclick="toggleBot(true)">▶ ACTIVAR SISTEMA</button>
         <button id="stopBtn" onclick="toggleBot(false)">⏹ DETENER</button>
@@ -72,15 +72,15 @@
         <thead>
             <tr>
                 <th>Mercado</th>
-                <th>Cierre</th>
-                <th>Temp</th>
+                <th>Hora Local</th> <th>Temp</th>
                 <th>Dev</th>
                 <th>Tend</th>
                 <th>Max Hoy</th>
                 <th>Target (Exp)</th> 
                 <th>Señal Sniper</th>
                 <th>Stake / Edge</th>
-                <th>Posición</th> <th>Acción</th>
+                <th>Posición</th> 
+                <th>Acción</th>
             </tr>
         </thead>
         <tbody id="tableBody"></tbody>
@@ -90,27 +90,6 @@
 
     <script>
         let isRunning = false;
-
-        function startLocalTimer() {
-            setInterval(() => {
-                const timerElements = document.querySelectorAll('.timer-cell');
-                timerElements.forEach(el => {
-                    const parts = el.innerText.split(':');
-                    if (parts.length === 3) {
-                        let h = parseInt(parts[0]), m = parseInt(parts[1]), s = parseInt(parts[2]);
-                        let totalSeconds = h * 3600 + m * 60 + s;
-                        if (totalSeconds > 0) {
-                            totalSeconds--;
-                            let nh = Math.floor(totalSeconds / 3600);
-                            let nm = Math.floor((totalSeconds % 3600) / 60);
-                            let ns = totalSeconds % 60;
-                            el.innerText = `${String(nh).padStart(2, '0')}:${String(nm).padStart(2, '0')}:${String(ns).padStart(2, '0')}`;
-                        }
-                    }
-                });
-            }, 1000);
-        }
-        startLocalTimer();
 
         async function toggleBot(state) {
             await fetch(state ? '/api/start' : '/api/stop', { method: 'POST' });
@@ -123,7 +102,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ id: cityId })
             });
-            update(); // Refrescar rápido
+            update(); 
         }
 
         function formatTemp(unit, val) {
@@ -189,15 +168,13 @@
                         ? `<span class="stake-box">$${d.stake}</span>` 
                         : `<span style="color:#555">--</span>`;
 
-                    // Botón de Tracking
                     const trackBtn = `<button onclick="toggleTrack('${d.id}')" class="track-btn ${d.isTracking ? 'active' : ''}">
                         ${d.isTracking ? '🛰️ TRACKING' : 'TRACK'}
                     </button>`;
 
                     tr.innerHTML = `
                         <td style="font-weight:bold; color:#e6edf3">${d.id}</td>
-                        <td class="timer-cell" style="color:#8b949e">${d.timer}</td> 
-                        <td class="val-cyan">${formatTemp(d.unit, d.curC)}</td>
+                        <td style="color:#8b949e; font-family:monospace">${d.timer}</td> <td class="val-cyan">${formatTemp(d.unit, d.curC)}</td>
                         <td class="${parseFloat(d.devDisp) >= 0 ? 'val-green' : 'val-red'}">${d.devDisp}</td>
                         <td>${d.trend}</td>
                         <td style="color:#d2a8ff; font-weight:bold">${formatTemp(d.unit, d.high)}</td>
