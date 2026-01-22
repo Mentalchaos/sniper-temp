@@ -27,8 +27,54 @@ let rollingHighs = {};
 let tafData = {}; 
 let dailyEventLog = {}; 
 
-// --- HELPER PARA DELAY ---
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// --- GATEKEEPER TEMPORAL (Clasificación EARLY / LATE) ---
+function checkTradingWindow(target, remainingMs, localHour, peakHour, isPastPeak) {
+    const style = target.tradeStyle || "AUTO";
+    const policy = target.peakPolicy || {};
+    const remainingHours = remainingMs / 3600000;
+    
+    // Si no tenemos hora pico, asumimos las 15:00 como estándar
+    const safePeak = peakHour !== null ? peakHour : 15;
+    const hoursToPeak = safePeak - localHour; // Positivo = falta para el pico, Negativo = ya pasó
+
+    // 1. LÓGICA EARLY (Mercados estables/continentales)
+    if (style === "EARLY") {
+        const deadZone = policy.deadZone || 6;
+        if (remainingHours <= deadZone) {
+            return { allowed: false, reason: "💤 MKT DEAD (EARLY)" };
+        }
+        return { allowed: true, reason: "" };
+    }
+
+    // 2. LÓGICA LATE (Mercados volátiles/marítimos)
+    if (style === "LATE") {
+        const window = policy.window || 6;
+        const stopPost = policy.stopPostPeak || 2; 
+
+        if (remainingHours > window) {
+            return { allowed: false, reason: "⏳ TOO EARLY" };
+        }
+        
+        // Si ya pasó el pico de calor hace mucho, bloqueamos entrada
+        if (isPastPeak && Math.abs(hoursToPeak) > stopPost) {
+            return { allowed: false, reason: "📉 PAST PEAK" };
+        }
+        
+        return { allowed: true, reason: "" };
+    }
+
+    // 3. LÓGICA AUTO (Híbridos)
+    if (style === "AUTO") {
+        if (remainingHours <= (policy.deadZone || 2)) {
+            return { allowed: false, reason: "💤 MKT DEAD" };
+        }
+        return { allowed: true, reason: "" };
+    }
+
+    return { allowed: true, reason: "" };
+}
 
 app.post('/api/track', (req, res) => {
     const { id } = req.body;
@@ -130,17 +176,25 @@ async function checkTarget(target) {
         const curC = d.temp;
         const dewC = d.dewp; 
 
-        // --- 1. RADAR & CONSENSO ---
+        // --- 1. RADAR & CONSENSO (INCERTIDUMBRE) ---
         let radarStatus = { incoming: false, amount: 0 };
+        let ensembleSpread = 0; 
+        
         if (d.lat && d.long) {
              radarStatus = await fetchRadar(d.lat, d.long) || { incoming: false };
              if (!consensusData[target.id] || (Date.now() - consensusData[target.id].ts > 3600000)) {
                  const con = await fetchConsensus(d.lat, d.long);
-                 if (con) consensusData[target.id] = { val: con, ts: Date.now() };
+                 if (con) {
+                     consensusData[target.id] = { val: con, ts: Date.now() };
+                     const models = [con.details.gfs, con.details.ecmwf, con.details.icon];
+                     const minModel = Math.min(...models);
+                     const maxModel = Math.max(...models);
+                     ensembleSpread = maxModel - minModel;
+                 }
              }
         }
 
-        // --- 2. ADVECCIÓN ---
+        // --- 2. ADVECCIÓN (VIENTO) ---
         let advectionBonus = 0;
         if (d.wdir !== "VRB") {
             const card = getCardinalDirection(d.wdir);
@@ -155,9 +209,10 @@ async function checkTarget(target) {
             }
         }
 
-        // --- 3. TARGET ---
+        // --- 3. TARGET HÍBRIDO ---
         let maxTarget = -999;
         let isCalibrating = true;
+        
         if (hourlyForecasts[target.id] && hourlyForecasts[target.id].length > 0) {
             const ibmMax = Math.max(...hourlyForecasts[target.id].map(f => f.temp));
             if (consensusData[target.id]) {
@@ -168,7 +223,6 @@ async function checkTarget(target) {
             isCalibrating = false;
         }
 
-        // --- 4. BIAS ---
         const benchmarkC = getCurrentBenchmark(target); 
         let biasBonus = 0;
         if (benchmarkC !== null) {
@@ -179,7 +233,6 @@ async function checkTarget(target) {
             }
         }
 
-        // --- 5. SPREAD ---
         let spreadBonus = 0;
         if (curC !== undefined && dewC !== undefined) {
             const spread = curC - dewC;
@@ -203,17 +256,20 @@ async function checkTarget(target) {
         let isSnowForecast = false;
         let isSunForecast = false;
         let isPrecipitationForecasted = false;
+        let peakHour = null;
 
         if (hourlyForecasts[target.id] && hourlyForecasts[target.id].length > 0) {
             const forecasts = hourlyForecasts[target.id];
             const maxFcst = forecasts.reduce((prev, current) => (prev.temp > current.temp) ? prev : current);
             if (maxFcst) {
                 const pDate = new Date(maxFcst.fcst_valid_local);
-                const pHour = pDate.getHours();
-                peakTimeStr = `${pHour}:00`;
+                peakHour = pDate.getHours();
+                peakTimeStr = `${peakHour}:00`;
+                
                 const localDate = new Date(new Date().toLocaleString("en-US", {timeZone: target.tz}));
                 const localHour = localDate.getHours();
-                if (localHour > pHour) isPastPeak = true;
+                if (localHour > peakHour) isPastPeak = true;
+                
                 const phrase = maxFcst.phrase_32char || maxFcst.wx_phrase || "";
                 peakConditionIcon = getWeatherIcon(phrase);
                 if (peakConditionIcon === "❄️") isSnowForecast = true;
@@ -224,11 +280,9 @@ async function checkTarget(target) {
 
         let polyPrice = null;
         let strategyUsed = "PRED"; 
-        let hedgeInfo = [];
-        let bucketMin = null; 
-        let bucketMax = null;
         let marketTitle = "--"; 
         let cleanSlug = typeof getDynamicSlug === 'function' ? getDynamicSlug(target.polySlug, target.tz) : target.polySlug;
+        let bucketMax = null;
 
         try {
             if (typeof fetchDynamicPrice === 'function') {
@@ -236,13 +290,8 @@ async function checkTarget(target) {
                 if (marketData && marketData.primary !== null) {
                     polyPrice = marketData.primary;
                     strategyUsed = marketData.strategy || "PRED";
-                    bucketMin = marketData.min;
                     bucketMax = marketData.max;
                     if (marketData.title) marketTitle = marketData.title.replace(/°[CF]/g, "").trim();
-
-                    const rawHedges = marketData.hedges || [];
-                    const buffer = 3.0; 
-                    hedgeInfo = rawHedges.filter(h => h.max >= tempForPoly && h.min <= (tempForPoly + buffer)).slice(0, 2);
                 }
             }
         } catch (polyError) {}
@@ -264,6 +313,7 @@ async function checkTarget(target) {
             if (tafMaxVal !== null && tafMaxVal >= maxTarget) tafConfirmed = true;
         }
 
+        // --- CÁLCULO DE PROBABILIDAD ---
         let reachChance = 0;
         let breakChance = 0;
         const rollingMax = rollingHighs[target.id] || curC;
@@ -275,10 +325,13 @@ async function checkTarget(target) {
             reachChance += advectionBonus; 
             reachChance += biasBonus;      
             reachChance += spreadBonus;    
+            if (ensembleSpread > 2.0) reachChance -= 10; 
             reachChance = Math.min(100, Math.max(0, reachChance));
         }
 
-        // --- LÓGICA DE BANKING ---
+        // --- BANKING LOGIC ---
+        let signalRaw = "";
+        
         if (strategyUsed === "BANKING" && polyPrice && polyPrice < 0.90) {
             const distToCeiling = bucketMax ? (bucketMax - highForPoly) : 99;
             let dangerZone = (distToCeiling < 1.0 && (trendArrow === "↑" || trendArrow === "↗"));
@@ -302,7 +355,6 @@ async function checkTarget(target) {
         }
 
         const devValue = benchmarkC !== null ? (curC - benchmarkC) : null;
-        let signalRaw = "";
         const isUserTracking = trackedCities.includes(target.id);
         let exitAlert = false;
         let exitReason = "";
@@ -329,20 +381,61 @@ async function checkTarget(target) {
             if (!isPrecipitationForecasted) { reachChance = 0; signalRaw = "🌧️ RADAR ALERT"; playSound('BLOOD'); }
         }
         
-        // --- 🔴 CORRECCIÓN DE PRECIO ALTO ---
-        // Si el precio es >= 0.85 (85¢), ya no recomendamos Banking porque el riesgo no vale la pena.
+        // Edge Calc
+        let edgeValue = 0;
+        if (polyPrice > 0) {
+            const myProb = reachChance / 100;
+            edgeValue = myProb - polyPrice;
+        }
+
         if (!exitAlert && strategyUsed === "BANKING" && reachChance > 90) {
-            if (polyPrice < 0.85) {
-                signalRaw = `💰 BANK HIGH (${highForPoly.toFixed(0)})`;
-            } else {
-                // Si está muy caro, lo marcamos como "PRICED OUT" para no confundir
-                signalRaw = "⛔ PRICED OUT";
+            if (polyPrice < 0.85) signalRaw = `💰 BANK HIGH (${highForPoly.toFixed(0)})`;
+            else signalRaw = "⛔ PRICED OUT";
+        }
+        
+        let signalText = signalRaw.replace(/\x1b\[[0-9;]*m/g, "");
+        let stake = calculateStake(reachChance, polyPrice, BANKROLL, KELLY_FRACTION);
+        
+        // --- FILTROS DE SEGURIDAD Y CALIDAD (V93) ---
+        
+        // 1. Filtro de Edge (Calidad)
+        if (strategyUsed !== "BANKING" && edgeValue < 0.10 && !signalText.includes("BANK")) {
+             if (!isUserTracking) {
+                 stake = "0.00";
+                 if (!signalText.includes("WAIT") && !signalText.includes("RISK")) {
+                     signalText = `📉 NO EDGE (${(edgeValue*100).toFixed(0)}%)`;
+                 }
+             }
+        }
+
+        // 2. Filtro Temporal (Gatekeeper EARLY/LATE)
+        const localTimeObj = new Date(new Date().toLocaleString("en-US", {timeZone: target.tz}));
+        const localHour = localTimeObj.getHours();
+        const remaining = getRemainingData(target.tz);
+        
+        const gate = checkTradingWindow(target, remaining.ms, localHour, peakHour, isPastPeak);
+        
+        if (!gate.allowed && !isUserTracking) {
+            stake = "0.00";
+            if (!signalText.includes("RAIN")) {
+                signalText = `⛔ ${gate.reason}`;
             }
         }
 
-        let signalText = signalRaw.replace(/\x1b\[[0-9;]*m/g, "");
-        const stake = calculateStake(reachChance, polyPrice, BANKROLL, KELLY_FRACTION);
+        // 3. Parche final de seguridad
+        if (signalText.includes("NO TRADE") || 
+            signalText.includes("WAIT") || 
+            signalText.includes("RISK") || 
+            signalText.includes("PRICED OUT") ||
+            signalText.includes("NO EDGE") ||
+            signalText.includes("MKT DEAD") ||
+            signalText.includes("TOO EARLY") ||
+            signalText.includes("PAST PEAK") ||
+            signalText.includes("RAIN")) {
+            stake = "0.00";
+        }
 
+        // LOGGING
         if (!isCalibrating && !signalText.includes("RAIN")) {
             const currentDay = new Date().toLocaleString("en-US", {timeZone: target.tz, day: 'numeric'});
             if (!dailyEventLog[target.id] || dailyEventLog[target.id].date !== currentDay) {
@@ -350,7 +443,7 @@ async function checkTarget(target) {
             }
             const logState = dailyEventLog[target.id];
 
-            if (signalText.includes("BANK") && !logState.reachLogged) {
+            if (signalText.includes("BANK") && !logState.reachLogged && stake !== "0.00") {
                  playSound('CASH'); 
                  writeLog(`BANKING | ${target.id} | High: ${highForPoly} | Stake: $${stake}`);
                  logState.reachLogged = true;
@@ -367,41 +460,40 @@ async function checkTarget(target) {
         }
 
         let targetDisp = (target.unit === 'F' ? (maxTarget * 9/5 + 32).toFixed(1) + "°F" : maxTarget.toFixed(1) + "°C");
-        if (peakTimeStr) targetDisp += ` <span style="margin-left: 5px; font-size:11px; color:${isPastPeak ? '#8b949e' : '#e3b341'}">🕒 ${peakTimeStr} ${peakConditionIcon}</span>`;
+        
+        // --- DISPLAY VISUAL ---
+        targetDisp += ` <span style="margin-left: 5px; font-size:11px; color:${isPastPeak ? '#8b949e' : '#e3b341'}">🕒 ${peakTimeStr} ${peakConditionIcon}</span>`;
+        
+        // AVISO VISUAL DE ADVECCIÓN TARDÍA (Solo alerta, no afecta stake)
+        if (isPastPeak && advectionBonus > 0) {
+            targetDisp += ` <span style="font-size:10px; color:#f0a500; font-weight:bold;">🔥WIND?</span>`;
+        }
+        
         if (radarStatus.incoming) {
             const color = isPrecipitationForecasted ? "#8b949e" : "#58a6ff"; 
             targetDisp += ` <span style="font-size:10px; color:${color}">🌧️ ${isPrecipitationForecasted ? "EXPECTED" : "SURPRISE"}</span>`;
         }
 
-        const score = reachChance + (isUserTracking ? 10000 : 0);
+        if (ensembleSpread > 2.0) {
+            targetDisp += ` <span style="font-size:10px; color:#ff7b72">⚠️DIVERGENCE</span>`;
+        }
 
-        const localTimeStr = new Date().toLocaleTimeString("en-US", {
-            timeZone: target.tz,
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-            hour12: false 
-        });
+        const score = reachChance + (isUserTracking ? 10000 : 0);
+        const localTimeStr = localTimeObj.toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+
+        let priceInfo = polyPrice ? `${marketTitle} (${(polyPrice * 100).toFixed(0)}¢)` : "No Mkt";
+        if (edgeValue !== 0 && strategyUsed !== "BANKING") {
+            const edgeColor = edgeValue >= 0.10 ? "#3fb950" : "#8b949e";
+            priceInfo += ` <span style="font-size:10px; color:${edgeColor}">E:${(edgeValue*100).toFixed(0)}%</span>`;
+        }
 
         return {
-            id: target.id,
-            unit: target.unit,
-            curC: curC,
-            high: highSoFar,
-            target: maxTarget,
-            targetDisp: targetDisp,
-            taf: tafMaxVal,
-            dev: devValue,
-            devDisp: devDisp,
-            trend: trendArrow,
-            signal: signalText,
-            priceDisp: polyPrice ? `${marketTitle} (${(polyPrice * 100).toFixed(0)}¢)` : "No Mkt",
-            stake: stake, 
-            hedge: "--",
-            fullSlug: cleanSlug,
-            timer: localTimeStr, 
-            score: score,
-            isTracking: isUserTracking
+            id: target.id, unit: target.unit, curC: curC, high: highSoFar,
+            target: maxTarget, targetDisp: targetDisp, taf: tafMaxVal,
+            dev: devValue, devDisp: devDisp, trend: trendArrow,
+            signal: signalText, priceDisp: priceInfo, stake: stake, 
+            hedge: "--", fullSlug: cleanSlug, timer: localTimeStr, 
+            score: score, isTracking: isUserTracking
         };
     } catch (e) { return null; }
 }
@@ -409,21 +501,23 @@ async function checkTarget(target) {
 async function monitorLoop() {
     if (!isRunning) return;
     
-    const results = [];
-    console.log("⏳ Iniciando ronda de escaneo...");
+    let currentRoundResults = [...latestResults]; 
+    console.log("⏳ Iniciando ronda rápida...");
     
     for (const t of TARGETS) {
         const res = await checkTarget(t);
-        if (res) results.push(res);
+        if (res) {
+            const idx = currentRoundResults.findIndex(r => r.id === t.id);
+            if (idx !== -1) currentRoundResults[idx] = res;
+            else currentRoundResults.push(res);
+            
+            currentRoundResults.sort((a, b) => b.score - a.score);
+            latestResults = [...currentRoundResults]; 
+        }
         await sleep(1000); 
     }
-
-    validResults = results;
-    validResults.sort((a, b) => b.score - a.score);
-    latestResults = validResults;
     
-    console.log(`✅ Ronda finalizada. ${validResults.length} ciudades procesadas.`);
-    
+    console.log(`✅ Ronda finalizada.`);
     if (isRunning) setTimeout(monitorLoop, 1000); 
 }
 
