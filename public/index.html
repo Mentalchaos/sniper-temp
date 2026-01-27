@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>SNIPER DASHBOARD V90 - STEALTH</title>
+    <title>SNIPER DASHBOARD V95</title>
     <style>
         body { background-color: #0d1117; color: #c9d1d9; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 20px; }
         h1 { color: #f0a500; text-align: center; font-size: 24px; margin-bottom: 20px; letter-spacing: 1px; }
@@ -23,7 +23,6 @@
         .val-cyan { color: #388bfd; }
         .val-gold { color: #e3b341; font-size: 11px; }
         
-        /* ESTILOS DE SEÑALES */
         .sig-badge { padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
         .sig-bank { background: #d29922; color: #fff; border: 1px solid #e3b341; box-shadow: 0 0 8px #d29922; animation: pulse 2s infinite; }
         .sig-pred { background: #6e40c9; color: #fff; border: 1px solid #8957e5; box-shadow: 0 0 5px #8957e5; }
@@ -32,7 +31,6 @@
         .sig-wait { background: #30363d; color: #8b949e; }
         .sig-rain { background: #161b22; color: #58a6ff; border: 1px solid #1f6feb; }
         
-        /* SEÑAL DE SALIDA (EXIT) */
         .sig-exit { background: #ff0000; color: #fff; border: 1px solid #ff4444; animation: flash 0.5s infinite; font-weight: 900; }
 
         .stake-box { background: #238636; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-family: monospace; }
@@ -44,7 +42,6 @@
         }
         .trade-btn:hover { background: #30363d; color: #fff; }
 
-        /* BOTÓN DE TRACKING */
         .track-btn {
             background: transparent; border: 1px solid #30363d; color: #8b949e;
             padding: 5px 10px; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 11px; transition: 0.2s;
@@ -63,7 +60,7 @@
     </style>
 </head>
 <body>
-    <h1>SNIPER V90 - STEALTH</h1>
+    <h1>SNIPER V95</h1>
     <div class="controls">
         <button id="startBtn" onclick="toggleBot(true)">▶ ACTIVAR SISTEMA</button>
         <button id="stopBtn" onclick="toggleBot(false)">⏹ DETENER</button>
@@ -72,8 +69,9 @@
         <thead>
             <tr>
                 <th>Mercado</th>
-                <th>Hora Local</th> <th>Temp</th>
-                <th>Dev</th>
+                <th>Hora Local</th> 
+                <th>Temp (METAR)</th>
+                <th>Max WG</th> <th>Dev</th>
                 <th>Tend</th>
                 <th>Max Hoy</th>
                 <th>Target (Exp)</th> 
@@ -106,7 +104,7 @@
         }
 
         function formatTemp(unit, val) {
-            if (val === null || val === -999) return "--";
+            if (val === null || val === -999 || val === undefined) return "--";
             return unit === 'F' ? (val * 9/5 + 32).toFixed(1) + "°F" : val.toFixed(1) + "°C";
         }
 
@@ -154,7 +152,6 @@
                 if (!data || data.length === 0) return;
 
                 body.innerHTML = '';
-                
                 data.forEach(d => {
                     const tr = document.createElement('tr');
                     
@@ -164,18 +161,26 @@
                         tradeHtml = `<button onclick="tradeAction('${d.fullSlug}', '${stakeVal}')" class="trade-btn">LINK ↗</button>`;
                     }
 
-                    const stakeDisplay = (d.stake !== '--' && d.stake !== '0.00') 
-                        ? `<span class="stake-box">$${d.stake}</span>` 
-                        : `<span style="color:#555">--</span>`;
+                    let stakeDisplay = "";
+                    if (d.stake !== '--' && d.stake !== '0.00' && d.stake !== 0) {
+                        stakeDisplay = `<span class="stake-box">$${d.stake}</span>`;
+                    } else if (d.priceDisp && !d.priceDisp.includes("No Mkt")) {
+                        stakeDisplay = `<span style="color:#333; font-size:10px">--</span>`;
+                    }
 
                     const trackBtn = `<button onclick="toggleTrack('${d.id}')" class="track-btn ${d.isTracking ? 'active' : ''}">
-                        ${d.isTracking ? '🛰️ TRACKING' : 'TRACK'}
+                        ${d.isTracking ? '🛰️' : 'TRACK'}
                     </button>`;
+                    
+                    const wgDisplay = d.wgMax !== null && d.wgMax !== undefined 
+                        ? `<span style="color:#d2a8ff; font-weight:bold">${formatTemp(d.unit, d.wgMax)}</span>` 
+                        : '<span style="color:#444">--</span>';
 
                     tr.innerHTML = `
                         <td style="font-weight:bold; color:#e6edf3">${d.id}</td>
-                        <td style="color:#8b949e; font-family:monospace">${d.timer}</td> <td class="val-cyan">${formatTemp(d.unit, d.curC)}</td>
-                        <td class="${parseFloat(d.devDisp) >= 0 ? 'val-green' : 'val-red'}">${d.devDisp}</td>
+                        <td style="color:#8b949e; font-family:monospace">${d.timer}</td> 
+                        <td class="val-cyan">${formatTemp(d.unit, d.curC)}</td>
+                        <td>${wgDisplay}</td> <td class="${parseFloat(d.devDisp) >= 0 ? 'val-green' : 'val-red'}">${d.devDisp}</td>
                         <td>${d.trend}</td>
                         <td style="color:#d2a8ff; font-weight:bold">${formatTemp(d.unit, d.high)}</td>
                         <td style="color:#f0a500; font-weight:bold">${d.targetDisp || '--'}</td>

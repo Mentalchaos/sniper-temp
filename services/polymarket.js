@@ -13,29 +13,21 @@ function getDynamicSlug(baseSlug, tz) {
 }
 
 function parseRangeTitle(title) {
-    // Quitamos °C, °F y espacios extra
     const clean = title.replace(/°[CF]/g, "").trim(); 
     
-    // 1. Caso Rango: "44-45" o "-5 to -4"
-    // Buscamos dos números separados por "to" o un guion (cuidando los negativos)
-    // Regex mejorada para capturar espacios opcionales alrededor del separador
     const rangeMatch = clean.match(/^(-?\d+)(?:\s*to\s*|\s*-\s*)(-?\d+)$/);
     if (rangeMatch) return { min: parseInt(rangeMatch[1]), max: parseInt(rangeMatch[2]) };
     
-    // 2. Caso Extremos: "Below -10" o "-10 or lower"
     if (clean.toLowerCase().includes("below") || clean.toLowerCase().includes("lower") || clean.includes("<")) {
         const match = clean.match(/(-?\d+)/);
         if (match) return { min: -999, max: parseInt(match[0]) };
     }
     
-    // 3. Caso Extremos: "Above 40" o "40 or higher"
     if (clean.toLowerCase().includes("higher") || clean.toLowerCase().includes("above") || clean.includes(">")) {
         const match = clean.match(/(-?\d+)/);
         if (match) return { min: parseInt(match[0]), max: 999 };
     }
 
-    // 4. NUEVO: Caso Número Exacto (Ej: "-5", "10")
-    // Si es solo un número (positivo o negativo) sin nada más
     if (/^-?\d+$/.test(clean)) {
         const num = parseInt(clean);
         return { min: num, max: num };
@@ -78,12 +70,11 @@ function findOpportunities(markets, predictedTemp, highSoFar, slugDebug) {
     let neighbors = [];
     let foundRangeButInactive = false;
     
-    // Array para guardar títulos encontrados (Debugging)
     let foundTitles = [];
 
     for (const m of markets) {
         const title = m.groupItemTitle || m.question;
-        foundTitles.push(title); // Guardamos para el log de error
+        foundTitles.push(title);
         
         const range = parseRangeTitle(title);
         
@@ -96,17 +87,14 @@ function findOpportunities(markets, predictedTemp, highSoFar, slugDebug) {
                 continue; 
             }
 
-            // 1. Coincidencia con Predicción
             if (tPred >= range.min && tPred <= range.max) {
                 primaryData = { price, min: range.min, max: range.max, title: title };
             }
 
-            // 2. Coincidencia con Banking (Max Hoy)
             if (tHigh >= range.min && tHigh <= range.max) {
                 bankerData = { price, min: range.min, max: range.max, title: title };
             }
 
-            // 3. Hedges
             const distMin = Math.abs(range.min - tPred);
             const distMax = Math.abs(range.max - tPred);
             if ((distMin <= 8 || distMax <= 8) && price < 0.20 && price > 0) {
@@ -130,8 +118,6 @@ function findOpportunities(markets, predictedTemp, highSoFar, slugDebug) {
         if (foundRangeButInactive) errorReason = "RANGE_PAUSED_OR_REVIEW";
         else {
             errorReason = "RANGE_NOT_IN_LIST";
-            // LOG DE DEBUG IMPORTANTE:
-            // Si no encuentra mercado, imprime en consola qué demonios encontró.
             console.log(`\n\x1b[35m[DEBUG DETECTIVE] ${slugDebug}\x1b[0m`);
             console.log(`Buscaba: ${tPred} | Encontró estos títulos:`);
             console.log(foundTitles.join(", "));

@@ -15,59 +15,57 @@ const UPSTREAM_MAP = {
         E: "EGMC"  
     },
     "RKSI": {
-        N: "RKSS", // Gimpo
-        S: "RKSW", // Suwon
-        W: "RKSI", // Mar Amarillo
-        E: "RKSM"  // Seoul Base
+        N: "RKSS",
+        S: "RKSW",
+        W: "RKSI",
+        E: "RKSM"
     },
 
     "CYYZ": {
-        N: "CYQA", // Muskoka
-        S: "KBUF", // Buffalo
-        W: "CYHM", // Hamilton
-        E: "CYTZ"  // Billy Bishop
+        N: "CYQA",
+        S: "KBUF",
+        W: "CYHM",
+        E: "CYTZ"
     },
 
     "KSEA": {
-        N: "KPAE", // Everett
-        S: "KOLM", // Olympia
-        W: "KPWT", // Bremerton
-        E: "KRNT"  // Renton
+        N: "KPAE",
+        S: "KOLM",
+        W: "KPWT",
+        E: "KRNT"
     },
 
     "KATL": {
-        N: "KCHA", // Chattanooga
-        S: "KMCN", // Macon
-        W: "KBHM", // Birmingham
-        E: "KAHN"  // Athens
+        N: "KCHA",
+        S: "KMCN",
+        W: "KBHM",
+        E: "KAHN"
     },
 
-    // DALLAS (Love Field - KDAL)
     "KDAL": {
-        N: "KDTO", // Denton
-        S: "KACT", // Waco
-        W: "KFTW", // Fort Worth Meacham
-        E: "KTYR"  // Tyler
+        N: "KDTO",
+        S: "KACT",
+        W: "KFTW",
+        E: "KTYR"
     },
 
-    // BUENOS AIRES (Ezeiza - SAEZ)
     "SAEZ": {
-        N: "SABE", // Aeroparque
-        S: "SAZP", // La Plata
-        W: "SAOU", // Santa Rosa
-        E: "SUMU"  // Montevideo (Carrasco) - Corrección SULP
+        N: "SABE",
+        S: "SAZP",
+        W: "SAOU",
+        E: "SUMU"
     },
     "LTAC": {
-        N: "LTCM", // Sinop (Aire frío Mar Negro)
-        S: "LTAF", // Adana (Aire caliente sur)
+        N: "LTCM",
+        S: "LTAF",
         W: "LTFM", 
         E: "LTAR"  
     },
     "NZWN": {
-        N: "NZPM", 
-        S: "NZCH", 
-        W: "NZNS", 
-        E: "NZWN"  
+        N: "NZOH",
+        S: "NZCH",
+        W: "NZNS",
+        E: "NZWN"
     }
 };
 

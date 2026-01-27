@@ -1,14 +1,11 @@
 const axios = require('axios');
 
-// Configuración simple sin headers complejos para evitar bloqueos
 const client = axios.create({
-    timeout: 10000 // 10 segundos de paciencia
+    timeout: 10000
 });
 
-// 1. METAR
 async function fetchMetar(icao) {
     try {
-        // Quitamos el cache-buster por si acaso la API lo odia
         const url = `https://www.aviationweather.gov/api/data/metar?ids=${icao}&format=json`;
         const res = await client.get(url);
         
@@ -16,16 +13,14 @@ async function fetchMetar(icao) {
             console.log(`⚠️ [METAR VACÍO] ${icao} devolvió datos vacíos.`);
             return null;
         }
-        return res.data; 
+        return res.data;
     } catch (e) {
-        // AQUÍ ESTÁ LA CLAVE: Veremos el error real en la consola
         console.log(`❌ [METAR ERROR] ${icao}: ${e.message}`);
         if (e.response) console.log(`   Status: ${e.response.status} - ${e.response.statusText}`);
         return null;
     }
 }
 
-// 2. TAF
 async function fetchTaf(icao) {
     try {
         const url = `https://www.aviationweather.gov/api/data/taf?ids=${icao}&format=json`;
@@ -34,7 +29,6 @@ async function fetchTaf(icao) {
     } catch (e) { return null; }
 }
 
-// 3. FORECAST
 async function fetchForecast(locId, apiKey) {
     try {
         const url = `https://api.weather.com/v1/location/${locId}/forecast/hourly/24hour.json?apiKey=${apiKey}&units=m`;
@@ -46,7 +40,6 @@ async function fetchForecast(locId, apiKey) {
     }
 }
 
-// 4. HISTORY
 async function fetchDailyHistory(icao, tz) {
     try {
         const url = `https://www.aviationweather.gov/api/data/metar?ids=${icao}&format=json&hours=24`;
@@ -55,7 +48,6 @@ async function fetchDailyHistory(icao, tz) {
     } catch (e) { return []; }
 }
 
-// 5. CONSENSO
 async function fetchConsensus(lat, lon) {
     try {
         const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=temperature_2m_max&models=gfs_seamless,ecmwf_ifs04,icon_seamless&timezone=auto&forecast_days=1`;
@@ -71,4 +63,30 @@ async function fetchConsensus(lat, lon) {
     } catch (e) { return null; }
 }
 
-module.exports = { fetchMetar, fetchTaf, fetchForecast, fetchDailyHistory, fetchConsensus };
+async function fetchWundergroundMax(locId, apiKey, unit, tz) {
+    try {
+        const dateStr = new Date().toLocaleString("en-US", {timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit'});
+        const [mm, dd, yyyy] = dateStr.split('/');
+        const formattedDate = `${yyyy}${mm}${dd}`;
+        
+        const unitCode = 'm'; 
+
+        const url = `https://api.weather.com/v1/location/${locId}/observations/historical.json?apiKey=${apiKey}&units=${unitCode}&startDate=${formattedDate}`;
+        
+        const res = await client.get(url);
+        
+        if (res.data && res.data.observations && res.data.observations.length > 0) {
+            let maxTemp = -999;
+            res.data.observations.forEach(obs => {
+                if (obs.temp > maxTemp) maxTemp = obs.temp;
+            });
+            return maxTemp;
+        }
+        return null;
+    } catch (e) {
+        console.log(`❌ [WG ERROR] ${locId}: ${e.message}`);
+        return null; 
+    }
+}
+
+module.exports = { fetchMetar, fetchTaf, fetchForecast, fetchDailyHistory, fetchConsensus, fetchWundergroundMax };

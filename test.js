@@ -1,4 +1,3 @@
-// test.js
 const { fetchMetar } = require('./services/weather');
 
 (async () => {
